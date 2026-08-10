@@ -9,6 +9,14 @@ Markdown
 
 A lightweight client application and kernel driver suite designed to share and connect USB peripherals (such as gaming steering wheels, pedals, and controllers) from an Android host device to a Windows client computer over a local network using the USB/IP protocol.
 
+
+Tested on:
+Samsung Galaxy S20+
+Samsung Galaxy S22+ Ultra
+Samsung Tab A8
+Essential PH-1
+Samsung Galaxy Z Fold 7
+Google Pixel 10 Fold Pro
 ---
 
 ## 📂 Project Structure
