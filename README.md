@@ -9,7 +9,7 @@ Markdown
 
 A lightweight client application and kernel driver suite designed to share and connect USB peripherals (such as gaming steering wheels, pedals, and controllers) from an Android host device to a Windows client computer over a local network using the USB/IP protocol.
 
-
+```text
 Tested on:
 Samsung Galaxy S20+
 Samsung Galaxy S22+ Ultra
@@ -18,7 +18,7 @@ Essential PH-1
 Samsung Galaxy Z Fold 7
 Google Pixel 10 Fold Pro
 ---
-
+```
 ## 📂 Project Structure
 
 ```text
@@ -65,14 +65,16 @@ Launch USBIP-Client-v0.3Beta.exe on Windows.
 Input the local IP address of your Android device as displayed inside the Android host app.
 
 Select your device from the list and click Attach to mount the remote USB peripheral directly into your Windows session.
+```
 
-🛠️ System Requirements
+## 🛠️ System Requirements
+```
 Windows Client: Windows 10 or Windows 11 (64-bit) with administrator access for initial driver installation.
 
 Android Host: Android device featuring USB OTG host capabilities.
-
+```
 ## ❓ Troubleshooting
-
+```
 | Issue | Cause | Solution |
 | --- | --- | --- |
 | **Code 10 ("Device cannot start")** | Android kernel is holding onto the interface drivers. | Re-plug the OTG hub into the phone and ensure the app displays `"Kicked Android driver and claimed Interface"`. |
@@ -82,9 +84,9 @@ Android Host: Android device featuring USB OTG host capabilities.
 | **High input lag / FFB jitter** | Wi-Fi interference or 2.4GHz band saturation. | Switch to a 5GHz Wi-Fi network, or use a direct USB-Ethernet adapter connected to the OTG hub. |
 
 ---
-
+```
 ## 🛠️ Technical Specifications & Build Details
-
+```
 * **NDK Level:** Native C++20 compiled with LLVM toolchain (`CMakeLists.txt`).
 * **Protocol:** USB/IP (Port 3240) over TCP.
 * **Transfer Types Supported:** `CONTROL`, `BULK`, `INTERRUPT`.
