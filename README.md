@@ -22,8 +22,8 @@ Google Pixel 10 Fold Pro
 ```
 ## 📂 Project Structure
 
-```text
-usbip-win2-suite/
+```
+USBIP-v1.x.x.zip/
 │
 ├── Drivers/
 │   ├── usbip2_ude.inf      # Virtual Host Controller driver setup
@@ -36,8 +36,9 @@ usbip-win2-suite/
 ├── install_drivers.bat     # Automated administrator-elevated driver installer
 ├── USBIP-Client-v0.3Beta.exe # Windows client application executable
 └── USBIP-Host-v0.3Beta.apk   # Android host companion application
-
-🚀 Quick Start Guide
+```
+## 🚀 Quick Start Guide
+```
 Step 1: Install Required Windows Drivers
 Because this project utilizes core kernel-mode components (usbip2_ude and usbip2_filter), they must be registered with Windows before running the client application.
 
@@ -81,9 +82,7 @@ Android Host: Android device featuring USB OTG host capabilities.
 | **Code 10 ("Device cannot start")** | Android kernel is holding onto the interface drivers. | Re-plug the OTG hub into the phone and ensure the app displays `"Kicked Android driver and claimed Interface"`. |
 | **Code 43 ("Invalid Device Descriptor")** | TCP stream or length header desynchronization. | Disconnect the client (`.\usbip.exe detach -p <port>`), restart the app server, and re-attach. |
 | **PowerShell freezes on `list -r**` | An active device stream is currently occupying the daemon listener thread. | Stop or detach active streams before listing devices, or use `Ctrl+C` to cancel the PowerShell query. |
-| **Steering wheel offset by a few degrees** | Network packet jitter during the wheel's initial calibration spin. | Leave the app connected, unplug the wheel's 24V AC wall power adapter for 3 seconds, and plug it back in to force a live re-calibration. |
 | **High input lag / FFB jitter** | Wi-Fi interference or 2.4GHz band saturation. | Switch to a 5GHz Wi-Fi network, or use a direct USB-Ethernet adapter connected to the OTG hub. |
-
 ---
 ```
 ## 🛠️ Technical Specifications & Build Details
