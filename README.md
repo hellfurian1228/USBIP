@@ -1,7 +1,8 @@
 Buy Me A Coffee?
 https://www.paypal.com/donate/?business=WVZF92EENUJ7Y&no_recurring=0&currency_code=USD
 
-Markdown
+THIS IS VERY EARLY IN DEVELOPMENT. THERE WILL BE BUGS.
+
 # USB/IP Cross-Platform Client & Driver Suite (`usbip-win2`)
 
 ![Status](https://img.shields.io/badge/Status-Beta-orange)
