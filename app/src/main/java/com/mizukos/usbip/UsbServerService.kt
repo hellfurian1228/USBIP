@@ -7,22 +7,32 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.IBinder
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 
 import android.os.Binder
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.LinkedList
 import java.util.Queue
 import java.util.concurrent.ConcurrentHashMap
 
 class UsbServerService : Service() {
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val nativeServerMutex = Mutex()
 
     private val binder = LocalBinder()
 
@@ -62,6 +72,11 @@ class UsbServerService : Service() {
     )
 
     private val openedDevices = ConcurrentHashMap<String, DeviceHandle>()
+    private val deviceJobs = ConcurrentHashMap<String, Job>()
+    private val pendingConnections = ConcurrentHashMap<String, Int>() // busId to deviceId
+    
+    // Explicit Session Guard: Prevents multiple bindings for the same physical device ID
+    private val activeDeviceIdTracker = ConcurrentHashMap<Int, String>() // deviceId to busId
     
     // Tracks devices user explicitly wanted to export (survives G29 mode switch resets)
     private val authorizedBusIds = mutableSetOf<String>()
@@ -108,16 +123,130 @@ class UsbServerService : Service() {
     }
 
     fun disconnectDeviceManually(deviceId: Int) {
-        val entry = openedDevices.entries.find { it.value.device.deviceId == deviceId }
-        if (entry != null) {
-            val busId = entry.key
-            authorizedBusIds.remove(busId)
-            android.util.Log.i("UsbServerService", "Manually disconnecting device on bus $busId")
-            val handle = openedDevices.remove(busId)
-            handle?.connection?.close()
-            invalidateDeviceFd(busId)
-            updateUiState()
+        serviceScope.launch {
+            val busId = activeDeviceIdTracker[deviceId]
+            if (busId != null) {
+                authorizedBusIds.remove(busId)
+                performComprehensiveCleanup(busId, deviceId)
+            } else {
+                // Fallback for UI sync if tracker is missing
+                val entry = openedDevices.entries.find { it.value.device.deviceId == deviceId }
+                if (entry != null) {
+                    performComprehensiveCleanup(entry.key, deviceId)
+                }
+            }
         }
+    }
+
+    private fun performComprehensiveCleanup(busId: String, deviceId: Int) {
+        android.util.Log.i("UsbServerService", "Unified Cleanup Triggered: Bus $busId, Device $deviceId")
+        
+        // 0. Cancel any pending jobs or async handshakes
+        deviceJobs.remove(busId)?.cancel()
+        pendingConnections.remove(busId)
+        
+        // 1. Force native TCP teardown and invalidation (This calls shutdown() on sockets)
+        invalidateDeviceFd(busId)
+        
+        // 2. Close active connection and release FD
+        val handle = openedDevices.remove(busId)
+        try {
+            handle?.connection?.close()
+        } catch (e: Exception) {
+            android.util.Log.e("UsbServerService", "Error closing connection: ${e.message}")
+        }
+        
+        // 3. Purge session trackers
+        activeDeviceIdTracker.remove(deviceId)
+        
+        // 4. Reset legacy metadata cache if applicable
+        if (cachedBusId == busId) {
+            resetLegacyMetadata()
+        }
+        
+        // 5. Reactive UI Sync
+        updateUiState()
+    }
+
+    /**
+     * Build a raw USB/IP OP_REP_DEVLIST body (ndev + devices + interfaces)
+     * Queries UsbManager directly to ensure no ghost entries or stale metadata.
+     */
+    fun getExportedDevicesPayload(): ByteArray {
+        val currentHardware = usbManager.deviceList.values
+        // Real-time synchronization: filter hardware by active/authorized handles
+        val exported = currentHardware.filter { dev ->
+            openedDevices.values.any { it.device.deviceName == dev.deviceName }
+        }
+
+        if (exported.isEmpty()) {
+            return ByteBuffer.allocate(4).apply { putInt(0) }.array()
+        }
+
+        // Calculate dynamic buffer size: 4 (ndev) + sum(312 + supported_intf_count * 4)
+        val totalSize = 4 + exported.sumOf { dev ->
+            val supportedCount = (0 until dev.interfaceCount)
+                .mapNotNull { dev.getInterface(it) }
+                .count { isInterfaceSupported(it) }
+            312 + (minOf(supportedCount, 32) * 4)
+        }
+        val buffer = ByteBuffer.allocate(totalSize).order(ByteOrder.BIG_ENDIAN)
+
+        buffer.putInt(exported.size)
+
+        for (device in exported) {
+            // Match the specific handle to retrieve our assigned Bus ID
+            val handle = openedDevices.values.find { it.device.deviceName == device.deviceName }
+            val busId = handle?.busId ?: "1-0"
+
+            val startPos = buffer.position()
+
+            // path (256 bytes) - Padded
+            val pathStr = "/sys/devices/virtual/usbip/$busId"
+            val pathBytes = pathStr.toByteArray()
+            buffer.put(pathBytes, 0, minOf(pathBytes.size, 256))
+            buffer.position(startPos + 256)
+
+            // busid (32 bytes) - Padded
+            val bIdBytes = busId.toByteArray()
+            buffer.put(bIdBytes, 0, minOf(bIdBytes.size, 32))
+            buffer.position(startPos + 256 + 32)
+
+            buffer.putInt(1) // busnum
+            buffer.putInt(device.deviceId) // devnum (transient ID)
+            buffer.putInt(3) // speed (High Speed)
+
+            // Dynamic Hardware Attributes
+            buffer.putShort((device.vendorId and 0xFFFF).toShort())
+            buffer.putShort((device.productId and 0xFFFF).toShort())
+            buffer.putShort(0x0111.toShort()) // bcdDevice (G29 compliant)
+
+            buffer.put(device.deviceClass.toByte())
+            buffer.put(device.deviceSubclass.toByte())
+            buffer.put(device.deviceProtocol.toByte())
+            buffer.put(1.toByte()) // bConfigurationValue
+            buffer.put(1.toByte()) // bNumConfigurations
+            
+            // Strictly validate supported interface count
+            val supportedInterfaces = (0 until device.interfaceCount)
+                .mapNotNull { device.getInterface(it) }
+                .filter { isInterfaceSupported(it) }
+            
+            val intfCount = minOf(supportedInterfaces.size, 32)
+            buffer.put(intfCount.toByte())
+
+            // Interface Descriptors (4 bytes each)
+            for (i in 0 until intfCount) {
+                val intf = supportedInterfaces[i]
+                buffer.put(intf.interfaceClass.toByte())
+                buffer.put(intf.interfaceSubclass.toByte())
+                buffer.put(intf.interfaceProtocol.toByte())
+                buffer.put(0.toByte()) // padding
+            }
+        }
+
+        android.util.Log.i("UsbServerService", "Generated dynamic DEVLIST payload for ${exported.size} device(s)")
+        return buffer.array()
     }
 
     private val usbReceiver = object : android.content.BroadcastReceiver() {
@@ -193,14 +322,64 @@ class UsbServerService : Service() {
 
     private fun handleIncomingDevice(device: UsbDevice) {
         val profile = getDeviceProfile(device)
+        val busId = getBusId(device)
+        
+        // 1. Session State Guard: Prevent duplicate port bindings or ghost sessions
+        if (activeDeviceIdTracker.containsKey(device.deviceId)) {
+            android.util.Log.i("UsbServerService", "Session Guard: Device ${device.deviceId} is already active. Ignoring duplicate request.")
+            return
+        }
+
         android.util.Log.i("UsbServerService", "Incoming USB: ${device.deviceName} (VID=${device.vendorId}, PID=${device.productId}) -> Profile: $profile")
         
+        // 1. & 2. Validate device for unsupported characteristics
+        if (!isDeviceSupported(device)) {
+            android.util.Log.w("UsbServerService", "Aborting connection: No supported interfaces found on device.")
+            serviceScope.launch(Dispatchers.Main) {
+                Toast.makeText(applicationContext, "This device consists exclusively of unsupported interfaces (Audio/Isochronous)", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
+
+        pendingConnections[busId] = device.deviceId
+        updateUiState()
+
         if (usbManager.hasPermission(device)) {
-            attachDevice(device)
+            val job = serviceScope.launch {
+                attachDevice(device)
+            }
+            deviceJobs[busId] = job
         } else {
             permissionQueue.add(device)
             processNextPermissionRequest()
         }
+    }
+
+    private fun isInterfaceSupported(intf: android.hardware.usb.UsbInterface): Boolean {
+        // Reject Audio Class interfaces
+        if (intf.interfaceClass == UsbConstants.USB_CLASS_AUDIO) {
+            return false
+        }
+        // Reject interfaces with any Isochronous endpoints
+        for (j in 0 until intf.endpointCount) {
+            val ep = intf.getEndpoint(j)
+            if (ep.type == UsbConstants.USB_ENDPOINT_XFER_ISOC) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private fun isDeviceSupported(device: UsbDevice): Boolean {
+        // A device is supported if it has AT LEAST ONE supported interface
+        for (i in 0 until device.interfaceCount) {
+            val intf = device.getInterface(i)
+            if (isInterfaceSupported(intf)) {
+                return true
+            }
+        }
+        android.util.Log.w("UsbServerService", "Validation Failed: Device ${device.deviceName} has no supported interfaces.")
+        return false
     }
 
     private fun processNextPermissionRequest() {
@@ -212,10 +391,15 @@ class UsbServerService : Service() {
     }
 
     private fun requestPermissionForDevice(device: UsbDevice) {
+        val intent = Intent(ACTION_USB_PERMISSION_SERVICE).apply {
+            setPackage(packageName) // Ensure intent is explicit for Android 14+
+            putExtra(UsbManager.EXTRA_DEVICE, device)
+        }
+        
         val permissionIntent = android.app.PendingIntent.getBroadcast(
-            this, device.deviceId, Intent(ACTION_USB_PERMISSION_SERVICE).apply {
-                putExtra(UsbManager.EXTRA_DEVICE, device)
-            },
+            this, 
+            device.deviceId, 
+            intent,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 android.app.PendingIntent.FLAG_MUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
             } else {
@@ -229,57 +413,122 @@ class UsbServerService : Service() {
         val profile = getDeviceProfile(device)
         val busId = getBusId(device)
         
-        val connection = usbManager.openDevice(device)
-        if (connection != null) {
-            android.util.Log.i("UsbServerService", "Attaching device: ${device.productName} as $busId (Profile: $profile)")
-            
-            // Special handling: Evict drivers except for Ethernet
-            if (profile != SpecialDeviceProfile.ETHERNET) {
-                for (i in 0 until device.interfaceCount) {
-                    val intf = device.getInterface(i)
-                    connection.claimInterface(intf, true)
-                }
-            } else {
-                android.util.Log.i("UsbServerService", "Bypassing driver eviction for Ethernet profile")
-            }
+        try {
+            val connection = usbManager.openDevice(device)
+            if (connection != null) {
+                android.util.Log.i("UsbServerService", "Attaching device: ${device.productName} as $busId (Profile: $profile)")
+                
+                // Track active session before claiming interfaces
+                activeDeviceIdTracker[device.deviceId] = busId
+                
+                // Special handling: Evict drivers except for Ethernet
+                if (profile != SpecialDeviceProfile.ETHERNET) {
+                    for (i in 0 until device.interfaceCount) {
+                        // Strict null-safety and bounds-checking for composite interfaces
+                        val intf = device.getInterface(i) ?: continue
+                        
+                        // Skip unsupported interfaces (Audio/ISOC) in composite devices
+                        if (!isInterfaceSupported(intf)) {
+                            android.util.Log.i("UsbServerService", "Skipping unsupported interface $i (Class: ${intf.interfaceClass})")
+                            continue
+                        }
 
-            val handle = DeviceHandle(device, connection, busId, profile)
-            openedDevices[busId] = handle
-            
-            // Update single-device legacy cache
-            updateLegacyMetadata(device, busId)
-            
-            // Notify native layer
-            updateDeviceFd(busId, connection.fileDescriptor)
+                        try {
+                            // Force claim detaches native kernel ownership if a driver is active
+                            val success = connection.claimInterface(intf, true)
+                            if (success) {
+                                android.util.Log.i("UsbServerService", "Successfully claimed interface $i (Class: ${intf.interfaceClass})")
+                            } else {
+                                android.util.Log.w("UsbServerService", "Failed to claim interface $i - locked by OS or driver.")
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("UsbServerService", "Exception claiming interface $i: ${e.message}")
+                        }
+                    }
+                } else {
+                    android.util.Log.i("UsbServerService", "Bypassing driver eviction for Ethernet profile")
+                }
+
+                val handle = DeviceHandle(device, connection, busId, profile)
+                openedDevices[busId] = handle
+                
+                // Update single-device legacy cache
+                updateLegacyMetadata(device, busId)
+                
+                // Notify native layer
+                updateDeviceFd(busId, connection.fileDescriptor)
+            } else {
+                val errorMsg = "Failed to open connection for ${device.deviceName} (OS-level lock or denied)"
+                android.util.Log.e("UsbServerService", errorMsg)
+                ErrorLogger.log(errorMsg)
+                serviceScope.launch(Dispatchers.Main) {
+                    Toast.makeText(applicationContext, "Failed to open device connection (Locked by OS)", Toast.LENGTH_SHORT).show()
+                }
+            }
+        } catch (e: Exception) {
+            val errorMsg = "Crash-safe catch during device attach: ${e.message}"
+            android.util.Log.e("UsbServerService", errorMsg)
+            ErrorLogger.log(errorMsg, e)
+            e.printStackTrace()
+        } finally {
+            pendingConnections.remove(busId)
             updateUiState()
-        } else {
-            android.util.Log.e("UsbServerService", "Failed to open connection for ${device.deviceName}")
         }
     }
 
     private fun updateUiState() {
-        val uiMap = openedDevices.mapValues { (_, handle) ->
-            DeviceInfo(
+        val uiMap = mutableMapOf<String, DeviceInfo>()
+        
+        // 1. Add currently opened/exported devices
+        openedDevices.forEach { (busId, handle) ->
+            uiMap[busId] = DeviceInfo(
                 deviceId = handle.device.deviceId,
-                busId = handle.busId,
+                busId = busId,
                 productName = handle.device.productName ?: "Unknown Device",
                 vendorId = handle.device.vendorId,
                 productId = handle.device.productId,
                 isConnected = true
             )
         }
+        
+        // 2. Add devices currently in the process of connecting
+        pendingConnections.forEach { (busId, deviceId) ->
+            if (!uiMap.containsKey(busId)) {
+                val device = usbManager.deviceList.values.find { it.deviceId == deviceId }
+                if (device != null) {
+                    uiMap[busId] = DeviceInfo(
+                        deviceId = deviceId,
+                        busId = busId,
+                        productName = device.productName ?: "Connecting...",
+                        vendorId = device.vendorId,
+                        productId = device.productId,
+                        isConnected = false
+                    )
+                }
+            }
+        }
+        
         _deviceList.value = uiMap
     }
 
     private fun detachDevice(device: UsbDevice) {
-        val busId = openedDevices.entries.find { it.value.device.deviceName == device.deviceName }?.key
-        if (busId != null) {
-            android.util.Log.i("UsbServerService", "Detaching device: $busId")
-            val handle = openedDevices.remove(busId)
-            handle?.connection?.close()
-            invalidateDeviceFd(busId)
-            updateUiState()
-        }
+        // Remove from permission queue if present
+        permissionQueue.removeAll { it.deviceName == device.deviceName }
+        
+        // Find by device name (path) or ID to ensure unified cleanup
+        val busId = activeDeviceIdTracker[device.deviceId] ?: 
+                    openedDevices.entries.find { it.value.device.deviceName == device.deviceName }?.key ?:
+                    getBusId(device)
+        
+        performComprehensiveCleanup(busId, device.deviceId)
+    }
+
+    private fun resetLegacyMetadata() {
+        cachedVid = 0
+        cachedPid = 0
+        cachedProductName = ""
+        cachedInterfaceCount = 0
+        cachedBusId = "1-0"
     }
 
     private fun updateLegacyMetadata(device: UsbDevice, busId: String) {
@@ -318,23 +567,29 @@ class UsbServerService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         android.util.Log.i("UsbServerService", "Service onStartCommand")
         
-        if (!isNativeServerStarted) {
-            android.util.Log.i("UsbServerService", "Starting persistent native server daemon")
-            startNativeServer(-1) // Start as daemon without initial device
-            isNativeServerStarted = true
-        }
+        serviceScope.launch {
+            nativeServerMutex.withLock {
+                if (!isNativeServerStarted) {
+                    android.util.Log.i("UsbServerService", "Starting persistent native server daemon")
+                    startNativeServer(-1) // Start as daemon without initial device
+                    isNativeServerStarted = true
+                }
+            }
 
-        intent?.let {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                it.getParcelableExtra("USB_DEVICE", UsbDevice::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                it.getParcelableExtra("USB_DEVICE")
-            }?.let { device ->
-                // User explicitly triggered this via Intent (usually from Connect button)
-                val busId = getBusId(device)
-                authorizedBusIds.add(busId)
-                handleIncomingDevice(device)
+            intent?.let {
+                val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    it.getParcelableExtra("USB_DEVICE", UsbDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    it.getParcelableExtra("USB_DEVICE")
+                }
+                
+                device?.let { usbDevice ->
+                    // User explicitly triggered this via Intent (usually from Connect button)
+                    val busId = getBusId(usbDevice)
+                    authorizedBusIds.add(busId)
+                    handleIncomingDevice(usbDevice)
+                }
             }
         }
 
@@ -348,6 +603,7 @@ class UsbServerService : Service() {
         openedDevices.values.forEach { it.connection.close() }
         openedDevices.clear()
         _deviceList.value = emptyMap()
+        serviceScope.cancel()
         super.onDestroy()
     }
 

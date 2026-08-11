@@ -1,6 +1,5 @@
 package com.mizukos.usbip
 
-import android.content.Context
 import java.net.Inet4Address
 import java.net.NetworkInterface
 
@@ -8,7 +7,7 @@ import java.net.NetworkInterface
  * Utility function to get the device's local IPv4 address.
  * This is used to display the IP for the USB/IP attach command.
  */
-fun getDeviceIpAddress(context: Context): String {
+fun getDeviceIpAddress(): String {
     try {
         val interfaces = NetworkInterface.getNetworkInterfaces()
         for (intf in interfaces) {
