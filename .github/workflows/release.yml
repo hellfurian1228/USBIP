@@ -25,10 +25,15 @@ jobs:
       - name: Build Release APK
         run: ./gradlew assembleRelease
 
+      - name: Rename APK with Tag Name
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          mv app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/USBIPBeta-${VERSION}.apk
+
       - name: Upload APK to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/apk/release/app-release.apk
+          files: app/build/outputs/apk/release/USBIPBeta-*.apk
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
