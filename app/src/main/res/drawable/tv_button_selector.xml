@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Focused state (TV Remote navigation) -->
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#4CAF50" /> <!-- Green highlight -->
+            <stroke android:width="3dp" android:color="#FFFFFF" /> <!-- White border -->
+            <corners android:radius="8dp" />
+        </shape>
+    </item>
+    <!-- Pressed state -->
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#388E3C" />
+            <corners android:radius="8dp" />
+        </shape>
+    </item>
+    <!-- Default state -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#2E7D32" />
+            <corners android:radius="8dp" />
+        </shape>
+    </item>
+</selector>
