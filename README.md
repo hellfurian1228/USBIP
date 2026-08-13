@@ -10,6 +10,30 @@ THIS IS VERY EARLY IN DEVELOPMENT. THERE WILL BE BUGS.
 
 A lightweight client application and kernel driver suite designed to share and connect USB peripherals (such as gaming steering wheels, pedals, and controllers) from an Android host device to a Windows client computer over a local network using the USB/IP protocol.
 
+Setup:
+
+Download USBIPClient.exe
+Download USBIPHost.apk
+Download USBIP.zip
+
+Extract USBIP.zip to a folder.
+Run the install_drivers.bat 
+
+Open USBIP.apk on Android Host and install.
+
+Open USBIP App on Android Device
+Connect USB Device(s)
+Refresh if needed (top right of app)
+Click "Connect"
+
+Open USBIP App on Windows Client
+Enter IP (displayed on Android app)
+Click "Scan" (second tab at top)
+Click "Connect"
+
+Device should be connected.
+
+If this does not work, try using the original USBIP_Win2 App on the Windows Client. This has been reported to work for some users.
 ```text
 Tested on:
 Samsung Galaxy S20+
@@ -75,23 +99,15 @@ Windows Client: Windows 10 or Windows 11 (64-bit) with administrator access for 
 
 Android Host: Android device featuring USB OTG host capabilities.
 ```
-## ❓ Troubleshooting
-```
-| Issue | Cause | Solution |
-| --- | --- | --- |
-| **Code 10 ("Device cannot start")** | Android kernel is holding onto the interface drivers. | Re-plug the OTG hub into the phone and ensure the app displays `"Kicked Android driver and claimed Interface"`. |
-| **Code 43 ("Invalid Device Descriptor")** | TCP stream or length header desynchronization. | Disconnect the client (`.\usbip.exe detach -p <port>`), restart the app server, and re-attach. |
-| **PowerShell freezes on `list -r**` | An active device stream is currently occupying the daemon listener thread. | Stop or detach active streams before listing devices, or use `Ctrl+C` to cancel the PowerShell query. |
-| **High input lag / FFB jitter** | Wi-Fi interference or 2.4GHz band saturation. | Switch to a 5GHz Wi-Fi network, or use a direct USB-Ethernet adapter connected to the OTG hub. |
----
-```
-## 🛠️ Technical Specifications & Build Details
-```
-* **NDK Level:** Native C++20 compiled with LLVM toolchain (`CMakeLists.txt`).
-* **Protocol:** USB/IP (Port 3240) over TCP.
-* **Transfer Types Supported:** `CONTROL`, `BULK`, `INTERRUPT`.
-* **OS Interop:** Linux `usbdevfs` ioctls (`USBDEVFS_SUBMITURB`, `USBDEVFS_REAPURB`, `USBDEVFS_DISCONNECT`, `USBDEVFS_CLAIMINTERFACE`, `USBDEVFS_SETCONFIGURATION`).
+I have had some users getting upset with how this is being made. So I will be transparent here.
+This is being done with Android Studio and VSCode. These programs have AI "Agents" that can write and modify code. It does virtually all of the heavy lifting. Something that would take a software engineer weeks or months to code, can be done in days.
+It is almost never "clean". It requires a lot of review, debugging, testing, etc. AI can only do so much. That's where I come in. I make sure it functions properly. If there are errors, I fix them. If I need to test certain devices, I will hook them up and make sure it works. If someone here says "I have error x1234 when trying to connect with x device", AI isn't going to magically fix that right away.
 
+Some people hate AI. I don't fully understand why. It is a tool. It obviously contributed to something multiple people are finding useful (including myself).
+
+So, in the kindest way possible. If you don't like how this is built, don't use it. Make your own from scratch and share it for free.
+
+Thank you.
 ```
 
 ## Acknowledgements and Credits
