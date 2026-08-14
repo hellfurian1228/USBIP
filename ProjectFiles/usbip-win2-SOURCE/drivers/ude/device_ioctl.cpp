@@ -534,7 +534,7 @@ auto send_ep0_out(
   *
   * Case b) is unavoidable because CSQ library calls IO_CSQ_COMPLETE_CANCELED_IRP after releasing a lock.
   * For that reason the cancellation logic is simplified and list of unlinked IRPs is not used.
-  * RET_SUBMIT and RET_INLINK must be ignored if IRP is not found (IRP was cancelled and completed).
+  * RET_SUBMIT and RET_UNLINK must be ignored if IRP is not found (IRP was cancelled and completed).
   */
 _IRQL_requires_same_
 _IRQL_requires_max_(DISPATCH_LEVEL)

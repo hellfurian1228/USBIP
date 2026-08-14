@@ -101,7 +101,7 @@ PAGED USBIP_STATUS usbip::recv_op_common(_Inout_ SOCKET *sock, _In_ UINT16 expec
  * 
  * TransferBufferMDL can be a chain and have size greater than mdl_size. 
  * TransferBufferMDL is not used directly because of BSODs in random third-party drivers during "usbip detach".
- * It happens rarely, but ~1500 attach/detach loops is used to enough to get it.
+ * It happens rarely, but ~1500 attach/detach loops is enough to reproduce it.
  * Symptoms: read memory address 0x0000'0000'0000'0008.
  * The possible reason could be that we do not own TransferBufferMDL and it can be freed by IOManager.
  * A partial MDL made from TransferBufferMDL fixes such BSODs.

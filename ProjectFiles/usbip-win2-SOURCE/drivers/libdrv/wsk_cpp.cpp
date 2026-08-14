@@ -86,7 +86,7 @@ private:
         static NTSTATUS completion(_In_ DEVICE_OBJECT*, _In_ IRP*, _In_ void *context);
 
         _IRQL_requires_max_(DISPATCH_LEVEL)
-        void set_completetion_routine()
+        void set_completion_routine()
         {
                 IoSetCompletionRoutine(m_irp, completion, this, true, true, true);
         }
@@ -103,7 +103,7 @@ NTSTATUS irp_cls::ctor()
         }
 
         KeInitializeEvent(&m_event, SynchronizationEvent, false);
-        set_completetion_routine();
+        set_completion_routine();
 
         return STATUS_SUCCESS;
 }
@@ -125,7 +125,7 @@ void irp_cls::reset()
 {
         NT_ASSERT(*this);
         IoReuseIrp(m_irp, STATUS_SUCCESS);
-        set_completetion_routine();
+        set_completion_routine();
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
