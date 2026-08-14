@@ -3,101 +3,77 @@ https://www.paypal.com/donate/?business=WVZF92EENUJ7Y&no_recurring=0&currency_co
 
 THIS IS VERY EARLY IN DEVELOPMENT. THERE WILL BE BUGS.
 
-# USB/IP Cross-Platform Client & Driver Suite (`usbip-win2`)
+<div align="center">
+  
+# 🌐 OmniStream
 
-![Status](https://img.shields.io/badge/Status-Beta-orange)
-![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Android-blue)
+**End-to-end network streaming and hardware redirection solution.**
 
-A lightweight client application and kernel driver suite designed to share and connect USB peripherals (such as gaming steering wheels, pedals, and controllers) from an Android host device to a Windows client computer over a local network using the USB/IP protocol.
+[![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6?logo=windows&logoColor=white)](#-omnistream-client-windows-setup)
+[![Platform: Android](https://img.shields.io/badge/Platform-Android%208.0+-3DDC84?logo=android&logoColor=white)](#-omnistream-host-android-setup)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-D22128.svg)](#-license)
 
-Setup:
+OmniStream pairs a high-performance **Windows Client** with a low-latency **Android Host** to seamlessly stream virtual displays and redirect local USB devices over your local network.
 
-Download USBIPClient.exe
-Download USBIPHost.apk
-Download USBIP.zip
+</div>
 
-Extract USBIP.zip to a folder.
-Run the install_drivers.bat 
-
-Open USBIP.apk on Android Host and install.
-
-Open USBIP App on Android Device
-Connect USB Device(s)
-Refresh if needed (top right of app)
-Click "Connect"
-
-Open USBIP App on Windows Client
-Enter IP (displayed on Android app)
-Click "Scan" (second tab at top)
-Click "Connect"
-
-Device should be connected.
-
-If this does not work, try using the original USBIP_Win2 App on the Windows Client. This has been reported to work for some users.
-```text
-Tested on:
-Samsung Galaxy S20+
-Samsung Galaxy S22+ Ultra
-Samsung Tab A8
-Essential PH-1
-Samsung Galaxy Z Fold 7
-Google Pixel 10 Fold Pro
 ---
-```
-## 📂 Project Structure
 
-```
-USBIP-v1.x.x.zip/
-│
-├── Drivers/
-│   ├── usbip2_ude.inf      # Virtual Host Controller driver setup
-│   ├── usbip2_ude.sys      # Virtual Host Controller driver binary
-│   ├── usbip2_ude.cat      # Security catalog file for UDE driver
-│   ├── usbip2_filter.inf   # USB device filter driver setup
-│   ├── usbip2_filter.sys   # USB device filter driver binary
-│   └── usbip2_filter.cat   # Security catalog file for filter driver
-│
-├── install_drivers.bat     # Automated administrator-elevated driver installer
-├── USBIP-Client-v0.3Beta.exe # Windows client application executable
-└── USBIP-Host-v0.3Beta.apk   # Android host companion application
-```
-## 🚀 Quick Start Guide
-```
-Step 1: Install Required Windows Drivers
-Because this project utilizes core kernel-mode components (usbip2_ude and usbip2_filter), they must be registered with Windows before running the client application.
+## 📑 Table of Contents
+- [Ecosystem Overview](#-ecosystem-overview)
+- [Features](#-features)
+- [OmniStream Client (Windows Setup)](#-omnistream-client-windows-setup)
+- [OmniStream Host (Android Setup)](#-omnistream-host-android-setup)
+- [Quick Start Guide](#-quick-start-guide)
+- [License](#-license)
 
-Keep all driver files inside the Drivers/ folder right next to your installer script.
+---
 
-Right-click on install_drivers.bat and select Run as administrator.
+## 📐 Ecosystem Overview
 
-Accept the User Account Control (UAC) prompt when it appears. The script will automatically install both required driver packages and stay open so you can review the status.
+| Component | Platform | Primary Function |
+| :--- | :--- | :--- |
+| **OmniStream Client** | Windows 10/11 (64-bit) | Manages virtual display streaming (DuoStream) and receives redirected USB devices. |
+| **OmniStream Host** | Android (Mobile & TV) | Shares attached USB hardware over the network using native USB/IP protocol stack. |
 
-Press any key to close the window once finished.
+---
 
-Step 2: Set Up the Android Host
-To share your physical USB hardware (e.g., a racing wheel setup) from an Android device:
+## ✨ Features
 
-Transfer USBIP-Host-v0.3Beta.apk to your Android device and install it (ensure installation from unknown sources is enabled if prompted).
+### 💻 OmniStream Client (Windows)
+* **Virtual Displays (DuoStream):** Manage and stream virtual displays using the Duo Indirect Display Driver (IDD) and Sunshine host.
+* **USB Redirection (OmniStream USB):** Redirect local USB devices to remote hosts over the network using a WHLK-certified UDE and filter driver stack.
+* **Integrated Logging:** Real-time log viewer capturing application events, OmniStream USB core logs, and driver status.
+* **Self-Elevation:** Automatically requests administrator privileges when required to install or configure drivers.
 
-Connect your target USB device directly to your Android device using a compatible USB OTG (On-The-Go) cable.
+### 📱 OmniStream Host (Android v1.0.4)
+* **Dark Theme UI:** Matches the Windows client palette (`#00D2D3` Teal accent, `#0F1115` Deep Dark background).
+* **Cross-Platform TV & Mobile Support:** Optimized responsive layout with focus handling (`btn_selector.xml`) for Android TV D-pad navigation and mobile touch.
+* **Proactive USB Export:** Automatically detects, prompts, and exports USB hardware upon plug-in with stable Bus ID caching.
+* **SuperSpeed USB 3.0 Support:** Accurately reports USB hardware speeds (Low, Full, High, SuperSpeed) using Android API 31+ reflection.
+* **Power & Connection Stability:** Native TCP keepalive to purge zombie sockets, `FLAG_KEEP_SCREEN_ON`, and a background `PARTIAL_WAKE_LOCK` with a 10-minute safety timeout.
+* **Hardware Robustness:** Specialized driver eviction logic for wheels switching modes (e.g., Logitech G29).
 
-Launch the Android USB/IP Host application and grant it permission to access the connected USB hardware.
+---
 
-Step 3: Connect and Play
-Ensure both your Windows PC and your Android device are connected to the same local network (Wi-Fi or Ethernet).
+## 💻 OmniStream Client (Windows Setup)
 
-Launch USBIP-Client-v0.3Beta.exe on Windows.
+### Requirements
+* **Operating System:** Windows 10 or Windows 11 (64-bit)
+* **Framework:** Qt 6.x (`Qt6Core`, `Qt6Gui`, `Qt6Widgets`, `Qt6Network`)
+* **Build Tools:** CMake 3.16+ and MSVC 2022 (or compatible compiler)
+* **Bundled Drivers:**
+  * OmniStream USB UDE and Filter drivers
+  * Duo Indirect Display Driver
 
-Input the local IP address of your Android device as displayed inside the Android host app.
-
-Select your device from the list and click Attach to mount the remote USB peripheral directly into your Windows session.
-```
-
-## 🛠️ System Requirements
-```
-Windows Client: Windows 10 or Windows 11 (64-bit) with administrator access for initial driver installation.
-
-Android Host: Android device featuring USB OTG host capabilities.
+### Project Structure
+```text
+├── CMakeLists.txt         # Build and CPack packaging configuration
+├── main.cpp               # Application entry point and self-elevation logic
+├── mainwindow.cpp         # Main UI, driver verification, Duo/USB integration
+├── logwindow.cpp          # Real-time logging window implementation
+├── Drivers/               # Bundled OmniStream USB driver binaries
+└── ProjectFiles/Duo/      # Bundled Duo display driver and Sunshine host binaries
 ```
 I have had some users getting upset with how this is being made. So I will be transparent here.
 This is being done with Android Studio and VSCode. These programs have AI "Agents" that can write and modify code. It does virtually all of the heavy lifting. Something that would take a software engineer weeks or months to code, can be done in days.
