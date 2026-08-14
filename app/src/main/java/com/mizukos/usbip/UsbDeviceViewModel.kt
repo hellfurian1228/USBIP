@@ -39,7 +39,7 @@ class UsbDeviceViewModel(private val usbManager: UsbManager) : ViewModel() {
         }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    private var usbService: UsbServerService? = null
+    private val _usbService = MutableStateFlow<UsbServerService?>(null)
     private var serviceJob: Job? = null
     private var isBound = false
     private val isInitialized = CompletableDeferred<Unit>()
@@ -47,23 +47,23 @@ class UsbDeviceViewModel(private val usbManager: UsbManager) : ViewModel() {
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as UsbServerService.LocalBinder
-            usbService = binder.getService()
+            val serviceInstance = binder.getService()
+            _usbService.value = serviceInstance
             
             // Cancel any previous collection job to avoid duplicates
             serviceJob?.let { it.cancel() }
             
             // Observe exported devices from service
-            serviceJob = usbService?.deviceList?.onEach { newList ->
-                exportedDevices.value = newList
-                // Re-scan hardware on exported list change to ensure sync
-                refreshDevices()
-            }?.launchIn(viewModelScope)
+            serviceJob = serviceInstance.deviceList
+                .onEach { newList ->
+                    exportedDevices.value = newList
+                }.launchIn(viewModelScope)
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
             serviceJob?.let { it.cancel() }
             serviceJob = null
-            usbService = null
+            _usbService.value = null
             isBound = false
         }
     }
@@ -122,41 +122,39 @@ class UsbDeviceViewModel(private val usbManager: UsbManager) : ViewModel() {
     suspend fun refreshDevices() = withContext(Dispatchers.IO) {
         val deviceList = usbManager.deviceList
         val infoList = deviceList.values.map { device ->
-            val name = if (device.productName.isNullOrEmpty()) {
-                "USB Device [${String.format("0x%04x", device.vendorId)}:${String.format("0x%04x", device.productId)}]"
-            } else {
-                device.productName!!
-            }
+            val name = device.productName ?: "USB Device [${String.format("0x%04x", device.vendorId)}:${String.format("0x%04x", device.productId)}]"
             
-            val currentState = _availableDevices.value.find { it.deviceId == device.deviceId }?.connectionState 
-                ?: ConnectionState.DISCONNECTED
-
             UsbDeviceInfo(
                 deviceName = name,
                 deviceId = device.deviceId,
                 devicePath = device.deviceName,
-                connectionState = currentState
+                connectionState = ConnectionState.DISCONNECTED // Will be mapped in 'devices' flow
             )
         }
         _availableDevices.value = infoList
     }
 
     fun connectDevice(deviceId: Int) {
+        val device = usbManager.deviceList.values.find { it.deviceId == deviceId }
+        if (device != null) {
+            connectDevice(device)
+        } else {
+            viewModelScope.launch { resetUiState() }
+        }
+    }
+
+    fun connectDevice(device: android.hardware.usb.UsbDevice) {
         viewModelScope.launch {
             try {
                 isInitialized.await()
+                val deviceId = device.deviceId
                 _availableDevices.update { list ->
                     list.map { 
                         if (it.deviceId == deviceId) it.copy(connectionState = ConnectionState.CONNECTING) 
                         else it 
                     }
                 }
-                val device = usbManager.deviceList.values.find { it.deviceId == deviceId }
-                if (device != null) {
-                    usbService?.connectDeviceManually(device)
-                } else {
-                    resetUiState()
-                }
+                _usbService.filterNotNull().first().connectDeviceManually(device)
             } catch (e: Exception) {
                 resetUiState()
             }
@@ -167,7 +165,7 @@ class UsbDeviceViewModel(private val usbManager: UsbManager) : ViewModel() {
         viewModelScope.launch {
             try {
                 isInitialized.await()
-                usbService?.disconnectDeviceManually(deviceId)
+                _usbService.filterNotNull().first().disconnectDeviceManually(deviceId)
             } catch (e: Exception) {
                 resetUiState()
             }

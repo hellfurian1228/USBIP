@@ -1,3 +1,18 @@
 <resources>
-    <string name="app_name">USBIP</string>
+    <string name="app_name">OmniStream Host</string>
+    <string name="status_label">Server Status</string>
+    <string name="ip_label">Server IP: %1$s</string>
+    <string name="port_label">Port: 3240</string>
+    <string name="devices_header">Available Devices</string>
+    <string name="no_devices">No USB devices detected</string>
+    <string name="copy_logs">Copy Support Logs</string>
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="status_connected">Connected active device(s)</string>
+    <string name="status_running">Persistent Daemon Running</string>
+    <string name="device_details_format">ID: %1$d | Path: %2$s</string>
+    <string name="connected_active">CONNECTED ACTIVE</string>
+    <string name="refresh">Refresh</string>
+    <string name="default_ip">Server IP: 127.0.0.1</string>
+    <string name="default_device_name">USB Device Name</string>
 </resources>

@@ -3,34 +3,43 @@ package com.mizukos.usbip
 import android.content.Intent
 import android.hardware.usb.UsbManager
 import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
+import android.widget.*
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.recyclerview.widget.DiffUtil
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.card.MaterialCardView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var usbManager: UsbManager
     private lateinit var viewModel: UsbDeviceViewModel
+    private lateinit var deviceAdapter: DeviceAdapter
+
+    private lateinit var tvServerIp: TextView
+    private lateinit var tvServiceStatus: TextView
+    private lateinit var rvDevices: RecyclerView
+    private lateinit var tvEmptyState: TextView
+    private lateinit var btnRefresh: ImageButton
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Keep screen on while app is in foreground
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        
+        setContentView(R.layout.activity_main)
 
         // Global error catching
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
@@ -39,40 +48,96 @@ class MainActivity : ComponentActivity() {
             defaultHandler?.uncaughtException(thread, throwable)
         }
 
-        // Initialize USB manager without blocking main thread
+        initViews()
+        setupViewModel()
+        setupRecyclerView()
+        observeState()
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            val appCtx = applicationContext
+            val serviceIntent = Intent(appCtx, UsbServerService::class.java)
+            appCtx.startForegroundService(serviceIntent)
+            
+            viewModel.bindService(appCtx)
+            
+            intent?.let { processIntent(it) }
+        }
+    }
+
+    private fun initViews() {
+        tvServerIp = findViewById(R.id.tv_server_ip)
+        tvServiceStatus = findViewById(R.id.tv_service_status)
+        rvDevices = findViewById(R.id.rv_devices)
+        tvEmptyState = findViewById(R.id.tv_empty_state)
+        val btnCopyLogs: Button = findViewById(R.id.btn_copy_logs)
+        btnRefresh = findViewById(R.id.btn_refresh)
+
+        btnRefresh.setOnClickListener {
+            lifecycleScope.launch { viewModel.refreshDevices() }
+        }
+
+        btnCopyLogs.setOnClickListener {
+            ErrorLogger.copyLogsToClipboard(this)
+        }
+    }
+
+    private fun setupViewModel() {
         usbManager = getSystemService(USB_SERVICE) as UsbManager
-        
-        viewModel = androidx.lifecycle.ViewModelProvider(this, object : androidx.lifecycle.ViewModelProvider.Factory {
+        viewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
             override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
                 @Suppress("UNCHECKED_CAST")
                 return UsbDeviceViewModel(usbManager) as T
             }
         })[UsbDeviceViewModel::class.java]
+    }
 
-        lifecycleScope.launch(Dispatchers.IO) {
-            // Start the service as a persistent daemon using application context to avoid leaks
-            val applicationContext = applicationContext
-            val serviceIntent = Intent(applicationContext, UsbServerService::class.java)
-            ContextCompat.startForegroundService(applicationContext, serviceIntent)
-            
-            // Bind to service for interaction using ViewModel which now uses application context
-            viewModel.bindService(applicationContext)
-            
-            // Process any cold-start intent safely
-            intent?.let { processIntent(it) }
-        }
+    private fun setupRecyclerView() {
+        deviceAdapter = DeviceAdapter(
+            onConnect = { device -> viewModel.connectDevice(device.deviceId) },
+            onDisconnect = { device -> viewModel.disconnectDevice(device.deviceId) }
+        )
+        rvDevices.layoutManager = LinearLayoutManager(this)
+        rvDevices.adapter = deviceAdapter
+    }
 
-        setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-                    MainScreen(uiState, viewModel)
+    private fun observeState() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch {
+                    viewModel.deviceIp.collectLatest { ip ->
+                        tvServerIp.text = getString(R.string.ip_label, ip)
+                    }
+                }
+                launch {
+                    viewModel.uiState.collectLatest { state ->
+                        when (state) {
+                            is UsbUiState.Loading -> {
+                                // Could show a global progress bar if needed
+                            }
+                            is UsbUiState.Success -> {
+                                updateDeviceList(state.devices)
+                            }
+                            is UsbUiState.Idle -> {}
+                        }
+                    }
                 }
             }
         }
+    }
+
+    private fun updateDeviceList(devices: List<UsbDeviceInfo>) {
+        if (devices.isEmpty()) {
+            rvDevices.visibility = View.GONE
+            tvEmptyState.visibility = View.VISIBLE
+        } else {
+            rvDevices.visibility = View.VISIBLE
+            tvEmptyState.visibility = View.GONE
+            deviceAdapter.submitList(devices)
+        }
+
+        val anyExported = devices.any { it.connectionState == ConnectionState.CONNECTED }
+        tvServiceStatus.text = if (anyExported) getString(R.string.status_connected) else getString(R.string.status_running)
+        tvServiceStatus.setTextColor(if (anyExported) getColor(R.color.colorPrimary) else getColor(R.color.colorTextSecondary))
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -84,10 +149,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun processIntent(intent: Intent) {
-        // Safe processing of USB intents off-main-thread if needed via ViewModel
-        // Downstream logic in ViewModel awaits initialization
-        if (intent.action == UsbManager.ACTION_USB_DEVICE_ATTACHED || 
-            intent.action == UsbManager.ACTION_USB_DEVICE_DETACHED) {
+        if (intent.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
+            val device: android.hardware.usb.UsbDevice? = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, android.hardware.usb.UsbDevice::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+            }
+            
+            if (device != null) {
+                lifecycleScope.launch {
+                    viewModel.refreshDevices()
+                    viewModel.connectDevice(device)
+                }
+            }
+        } else if (intent.action == UsbManager.ACTION_USB_DEVICE_DETACHED) {
             lifecycleScope.launch {
                 viewModel.refreshDevices()
                 viewModel.resetUiState()
@@ -100,168 +176,67 @@ class MainActivity : ComponentActivity() {
         viewModel.unbindService(this)
     }
 
-    @OptIn(ExperimentalMaterial3Api::class)
-    @Composable
-    fun MainScreen(uiState: UsbUiState, viewModel: UsbDeviceViewModel) {
-        val deviceIp by viewModel.deviceIp.collectAsStateWithLifecycle()
-        val context = androidx.compose.ui.platform.LocalContext.current
+    inner class DeviceAdapter(
+        private val onConnect: (UsbDeviceInfo) -> Unit,
+        private val onDisconnect: (UsbDeviceInfo) -> Unit
+    ) : RecyclerView.Adapter<DeviceViewHolder>() {
 
-        Scaffold(
-            topBar = {
-                TopAppBar(
-                    title = { Text("USB/IP Server Hub") },
-                    actions = {
-                        IconButton(onClick = { 
-                            lifecycleScope.launch {
-                                viewModel.refreshDevices()
-                            }
-                        }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                        }
-                    }
-                )
-            },
-            floatingActionButton = {
-                FloatingActionButton(
-                    onClick = { ErrorLogger.copyLogsToClipboard(context) },
-                    containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer
-                ) {
-                    Icon(Icons.Default.Info, contentDescription = "Copy Support Logs")
-                }
-            }
-        ) { padding ->
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-            ) {
-                Surface(
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Server IP: $deviceIp",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                        )
-                        Text(
-                            text = "Port: 3240",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        val anyExported = (uiState as? UsbUiState.Success)?.devices?.any { 
-                            it.connectionState == ConnectionState.CONNECTED 
-                        } ?: false
-                        
-                        Text(
-                            text = if (anyExported) "Status: Connected active device(s)" 
-                                   else "Status: Persistent Daemon Running",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Bold,
-                            color = if (anyExported) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSecondaryContainer
-                        )
-                    }
-                }
+        private var devices: List<UsbDeviceInfo> = emptyList()
 
-                when (uiState) {
-                    is UsbUiState.Loading, UsbUiState.Idle -> {
-                        Box(
-                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator()
-                        }
-                    }
-                    is UsbUiState.Success -> {
-                        if (uiState.devices.isEmpty()) {
-                            Box(
-                                modifier = Modifier.weight(1f).fillMaxWidth(),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text("No USB devices detected", style = MaterialTheme.typography.bodyLarge)
-                            }
-                        } else {
-                            LazyColumn(
-                                modifier = Modifier.weight(1f).fillMaxWidth(),
-                                contentPadding = PaddingValues(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                items(uiState.devices, key = { it.deviceId }) { device ->
-                                    DeviceCard(device, viewModel)
-                                }
-                            }
-                        }
-                    }
-                }
+        fun submitList(newList: List<UsbDeviceInfo>) {
+            val diffCallback = object : DiffUtil.Callback() {
+                override fun getOldListSize(): Int = devices.size
+                override fun getNewListSize(): Int = newList.size
+                override fun areItemsTheSame(oldPos: Int, newPos: Int): Boolean =
+                    devices[oldPos].deviceId == newList[newPos].deviceId
+                override fun areContentsTheSame(oldPos: Int, newPos: Int): Boolean =
+                    devices[oldPos] == newList[newPos]
             }
+            val diffResult = DiffUtil.calculateDiff(diffCallback)
+            devices = newList
+            diffResult.dispatchUpdatesTo(this)
         }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): DeviceViewHolder {
+            val view = LayoutInflater.from(parent.context).inflate(R.layout.item_device, parent, false)
+            return DeviceViewHolder(view)
+        }
+
+        override fun onBindViewHolder(holder: DeviceViewHolder, position: Int) {
+            val device = devices[position]
+            holder.bind(device, onConnect, onDisconnect)
+        }
+
+        override fun getItemCount(): Int = devices.size
     }
 
-    @Composable
-    fun DeviceCard(device: UsbDeviceInfo, viewModel: UsbDeviceViewModel) {
-        val isExported = device.connectionState == ConnectionState.CONNECTED
-        val isConnecting = device.connectionState == ConnectionState.CONNECTING
+    inner class DeviceViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        private val card: MaterialCardView = itemView.findViewById(R.id.device_card)
+        private val tvName: TextView = itemView.findViewById(R.id.tv_device_name)
+        private val tvDetails: TextView = itemView.findViewById(R.id.tv_device_details)
+        private val tvStatus: TextView = itemView.findViewById(R.id.tv_connection_status)
+        private val progress: ProgressBar = itemView.findViewById(R.id.progress_connecting)
+        private val btnAction: Button = itemView.findViewById(R.id.btn_action)
 
-        ElevatedCard(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.elevatedCardColors(
-                containerColor = if (isExported) Color(0xFF1B5E20) // Deep Green
-                                else MaterialTheme.colorScheme.surface
-            )
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp)
-            ) {
-                Text(
-                    text = device.deviceName,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = if (isExported) Color.White else Color.Unspecified
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "ID: ${device.deviceId} | Path: ${device.devicePath}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (isExported) Color.LightGray else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                
-                if (isExported) {
-                    Text(
-                        text = "CONNECTED ACTIVE",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.Cyan,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+        fun bind(device: UsbDeviceInfo, onConnect: (UsbDeviceInfo) -> Unit, onDisconnect: (UsbDeviceInfo) -> Unit) {
+            tvName.text = device.deviceName
+            tvDetails.text = itemView.context.getString(R.string.device_details_format, device.deviceId, device.devicePath)
+            
+            val isExported = device.connectionState == ConnectionState.CONNECTED
+            val isConnecting = device.connectionState == ConnectionState.CONNECTING
 
-                Spacer(modifier = Modifier.height(12.dp))
-                
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-                    if (isConnecting) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                    } else {
-                        Button(
-                            onClick = {
-                                if (isExported) {
-                                    viewModel.disconnectDevice(device.deviceId)
-                                } else {
-                                    viewModel.connectDevice(device.deviceId)
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isExported) Color.Red 
-                                                 else MaterialTheme.colorScheme.primary,
-                                contentColor = Color.White
-                            )
-                        ) {
-                            Text(text = if (isExported) "Disconnect Device" else "Connect Device")
-                        }
-                    }
-                }
+            tvStatus.visibility = if (isExported) View.VISIBLE else View.GONE
+            progress.visibility = if (isConnecting) View.VISIBLE else View.GONE
+            btnAction.visibility = if (isConnecting) View.GONE else View.VISIBLE
+
+            if (isExported) {
+                card.setCardBackgroundColor(getColor(R.color.green))
+                btnAction.text = getString(R.string.disconnect)
+                btnAction.setOnClickListener { onDisconnect(device) }
+            } else {
+                card.setCardBackgroundColor(getColor(R.color.colorSurface))
+                btnAction.text = getString(R.string.connect)
+                btnAction.setOnClickListener { onConnect(device) }
             }
         }
     }

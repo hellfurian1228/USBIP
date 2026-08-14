@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Logitech G29 (Driving Force mode) -->
-    <usb-device vendor-id="1133" product-id="49743" />
-    <!-- Logitech G29 (G29 mode) -->
-    <usb-device vendor-id="1133" product-id="49762" />
+    <!-- Generic filter to prompt for all USB devices -->
+    <usb-device />
 </resources>
