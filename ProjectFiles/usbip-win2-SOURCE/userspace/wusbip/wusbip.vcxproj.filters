@@ -1,0 +1,206 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <None Include="wxpatch.bat" />
+    <None Include="resources\Add.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\check.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\close.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\Comment_Edit.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\copy.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\Info.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\usb.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\save_alt.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\Save.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\replay.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\refresh.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\dismiss.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\Select_All_On.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\Save_Multiple.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\text_increase.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\text_decrease.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="..\usbip\usb.ids">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\power_settings_new.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\app_dark_checked.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\app_dark_checked_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\app_dark_unchecked.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\app_dark_unchecked_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\app_light_checked.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\app_light_checked_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\app_light_unchecked.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\app_light_unchecked_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\appearance.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\appearance_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\attach_stop.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\attach_stop_all.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\attach_stop_all_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\attach_stop_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\check_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\close_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\Comment_Edit_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\computer.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\computer_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\copy_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\Add_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\Info_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\refresh_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\replay_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\save_alt_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\Save_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\Save_Multiple_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\Select_All_On_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\power_settings_new_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\text_decrease_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\text_increase_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\usb_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\view_columns.svg">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="resources\view_columns_dark.svg">
+      <Filter>Resources</Filter>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="wusbip.cpp" />
+    <ClCompile Include="frame.cpp" />
+    <ClCompile Include="utils.cpp" />
+    <ClCompile Include="device_columns.cpp" />
+    <ClCompile Include="persist.cpp" />
+    <ClCompile Include="log.cpp" />
+    <ClCompile Include="font.cpp" />
+    <ClCompile Include="taskbaricon.cpp" />
+    <ClCompile Include="app.cpp" />
+    <ClCompile Include="wxutils.cpp" />
+    <ClCompile Include="tree_comparator.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="wusbip.h" />
+    <ClInclude Include="frame.h" />
+    <ClInclude Include="utils.h" />
+    <ClInclude Include="resource.h" />
+    <ClInclude Include="device_columns.h" />
+    <ClInclude Include="persist.h" />
+    <ClInclude Include="log.h" />
+    <ClInclude Include="font.h" />
+    <ClInclude Include="taskbaricon.h" />
+    <ClInclude Include="app.h" />
+    <ClInclude Include="wxutils.h" />
+    <ClInclude Include="tree_comparator.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="readme.txt" />
+    <Text Include="..\..\LICENSE.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="wusbip.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Resources">
+      <UniqueIdentifier>{2d369b4c-292f-49a3-a640-7b5b69b4845d}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="resources\USBip.ico">
+      <Filter>Resources</Filter>
+    </Image>
+  </ItemGroup>
+</Project>

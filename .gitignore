@@ -13,3 +13,24 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Build directories
+build/
+x64/
+Debug/
+Release/
+
+# IDE files
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Qt files
+*.CMakefiles
+*.autosave
+
+# Temporary files
+*.log
+*.tmp
