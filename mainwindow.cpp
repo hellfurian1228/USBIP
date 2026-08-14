@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "audiorelaymanager.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -29,17 +30,15 @@
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent) {
-    setWindowTitle("OmniStream Desktop Client v1.0.0");
+    setWindowTitle("USBIP Client v1.0.0");
     resize(1000, 650);
 
     logWindow = new LogWindow(this);
+    audioRelayManager = new AudioRelayManager(this);
 
     setupUi();
+
     loadSettings();
-    populateDuoUsers();
-    populateDuoAdapters();
-    loadDuoInstances();
-    loadDuoGlobalSettings();
     checkAndConfigureDrivers();
 
     try {
@@ -86,7 +85,7 @@ MainWindow::MainWindow(QWidget *parent)
         trayIcon->show();
     }
 
-    logWindow->appendLog("INFO", "OmniStream Client initialized successfully.");
+    logWindow->appendLog("INFO", "USBIP Client initialized successfully.");
 
     if (autoConnectCheckBox->isChecked()) {
         logWindow->appendLog("INFO", "Auto-connect enabled. Initiating startup connection...");
@@ -98,23 +97,18 @@ MainWindow::~MainWindow() {}
 
 void MainWindow::closeEvent(QCloseEvent *event) {
     saveSettings();
-    QString activeInst = duoInstanceCombo->currentText();
-    if (!activeInst.isEmpty()) {
-        saveDuoInstanceSettings(activeInst);
-    }
-    saveDuoGlobalSettings();
 
     if (minimizeToTrayCheckBox->isChecked() && !isExiting && QSystemTrayIcon::isSystemTrayAvailable()) {
         event->ignore();
         hide();
-        trayIcon->showMessage("OmniStream Client", "Application minimized to system tray.", QSystemTrayIcon::Information, 2000);
+        trayIcon->showMessage("USBIP Client", "Application minimized to system tray.", QSystemTrayIcon::Information, 2000);
     } else {
         event->accept();
     }
 }
 
 void MainWindow::loadSettings() {
-    QSettings settings("OmniStream", "OmniStreamClient");
+    QSettings settings("USBIPClient", "USBIPClient");
     
     QStringList profiles = settings.value("profiles/list", QStringList() << "Default").toStringList();
     currentProfile = settings.value("profiles/active", "Default").toString();
@@ -135,7 +129,7 @@ void MainWindow::loadSettings() {
 }
 
 void MainWindow::saveSettings() {
-    QSettings settings("OmniStream", "OmniStreamClient");
+    QSettings settings("USBIPClient", "USBIPClient");
     
     QStringList profiles;
     for (int i = 0; i < profileCombo->count(); ++i) {
@@ -148,13 +142,12 @@ void MainWindow::saveSettings() {
 }
 
 void MainWindow::loadProfileSettings(const QString &profileName) {
-    QSettings settings("OmniStream", "OmniStreamClient");
+    QSettings settings("USBIPClient", "USBIPClient");
     settings.beginGroup("profiles/" + profileName);
     
     QString savedIp = settings.value("hostIp", "192.168.1.11").toString();
     QString savedPort = settings.value("port", "3240").toString();
     QString savedTheme = settings.value("theme", "Dark").toString();
-    int savedBitrate = settings.value("bitrate", 45).toInt();
     bool savedAutoConnect = settings.value("autoConnect", false).toBool();
     bool savedMinimizeToTray = settings.value("minimizeToTray", false).toBool();
     
@@ -169,8 +162,6 @@ void MainWindow::loadProfileSettings(const QString &profileName) {
     }
     applyTheme(savedTheme);
 
-    bitrateSpinBox->setValue(savedBitrate);
-    bitrateSlider->setValue(savedBitrate);
     autoConnectCheckBox->setChecked(savedAutoConnect);
     minimizeToTrayCheckBox->setChecked(savedMinimizeToTray);
 
@@ -178,13 +169,12 @@ void MainWindow::loadProfileSettings(const QString &profileName) {
 }
 
 void MainWindow::saveProfileSettings(const QString &profileName) {
-    QSettings settings("OmniStream", "OmniStreamClient");
+    QSettings settings("USBIPClient", "USBIPClient");
     settings.beginGroup("profiles/" + profileName);
     
     settings.setValue("hostIp", hostIpLineEdit->text().trimmed());
     settings.setValue("port", portLineEdit->text().trimmed());
     settings.setValue("theme", themeCombo->currentText());
-    settings.setValue("bitrate", bitrateSpinBox->value());
     settings.setValue("autoConnect", autoConnectCheckBox->isChecked());
     settings.setValue("minimizeToTray", minimizeToTrayCheckBox->isChecked());
     
@@ -195,7 +185,7 @@ void MainWindow::saveProfileSettings(const QString &profileName) {
 bool MainWindow::validatePort(quint16 port) {
     if (port < 3240 || port > 3260) {
         logWindow->appendLog("ERROR", QString("Port %1 out of bounds. Allowed range: 3240-3260.").arg(port));
-        QMessageBox::critical(this, "Port Error", "Invalid port specified! OmniStream requires a port between 3240 and 3260.");
+        QMessageBox::critical(this, "Port Error", "Invalid port specified! USBIP Client requires a port between 3240 and 3260.");
         return false;
     }
     return true;
@@ -232,7 +222,6 @@ void MainWindow::setupUi() {
     tabWidget = new QTabWidget(this);
     tabWidget->addTab(createNetworkTab(), "Network & USB/IP");
     tabWidget->addTab(createAudioTab(), "Audio Relay");
-    tabWidget->addTab(createDisplayTab(), "Display & Streaming");
     tabWidget->addTab(createSettingsTab(), "Settings");
 
     mainLayout->addLayout(topBarLayout);
@@ -293,6 +282,12 @@ QWidget* MainWindow::createAudioTab() {
     enableAudioRelayButton = new QPushButton("Enable Audio Relay Stream", this);
     enableAudioRelayButton->setCheckable(true);
 
+    audioInputDeviceCombo = new QComboBox(this);
+    audioInputDeviceCombo->addItems(audioRelayManager->getAvailableInputDevices());
+
+    audioOutputDeviceCombo = new QComboBox(this);
+    audioOutputDeviceCombo->addItems(audioRelayManager->getAvailableOutputDevices());
+
     audioQualityCombo = new QComboBox(this);
     audioQualityCombo->addItems({"Low Latency (64 kbps)", "Balanced (128 kbps)", "High Fidelity (256 kbps)", "Lossless Uncompressed"});
     audioQualityCombo->setCurrentIndex(2);
@@ -313,6 +308,8 @@ QWidget* MainWindow::createAudioTab() {
     resetAudioButton = new QPushButton("Reset Audio Subsystem", this);
 
     formLayout->addRow("Relay State:", enableAudioRelayButton);
+    formLayout->addRow("Input Device:", audioInputDeviceCombo);
+    formLayout->addRow("Output Device:", audioOutputDeviceCombo);
     formLayout->addRow("Preset Quality:", audioQualityCombo);
     formLayout->addRow("Sample Rate:", audioSampleRateCombo);
     formLayout->addRow(audioBufferLabel, audioBufferSlider);
@@ -323,197 +320,34 @@ QWidget* MainWindow::createAudioTab() {
 
     connect(resetAudioButton, &QPushButton::clicked, this, &MainWindow::handleResetAudioSubsystem);
 
-    return tab;
-}
+    connect(enableAudioRelayButton, &QPushButton::toggled, this, [this](bool checked) {
+        if (checked) {
+            QString ipStr = hostIpLineEdit->text().trimmed();
+            QHostAddress targetIp(ipStr);
+            if (targetIp.isNull()) {
+                logWindow->appendLog("ERROR", "Invalid Host IP address for Audio Relay.");
+                enableAudioRelayButton->setChecked(false);
+                return;
+            }
 
-QWidget* MainWindow::createDisplayTab() {
-    QWidget *tab = new QWidget(this);
-    QVBoxLayout *layout = new QVBoxLayout(tab);
+            int sampleRate = 48000;
+            QString rateStr = audioSampleRateCombo->currentText();
+            if (rateStr.contains("44100")) sampleRate = 44100;
+            else if (rateStr.contains("48000")) sampleRate = 48000;
+            else if (rateStr.contains("96000")) sampleRate = 96000;
 
-    QGroupBox *displayGroup = new QGroupBox("Display & Stream Configurations", tab);
-    QFormLayout *formLayout = new QFormLayout(displayGroup);
+            QAudioDevice inputDevice = audioRelayManager->findInputDevice(audioInputDeviceCombo->currentText());
+            QAudioDevice outputDevice = audioRelayManager->findOutputDevice(audioOutputDeviceCombo->currentText());
 
-    resolutionCombo = new QComboBox(this);
-    resolutionCombo->addItems({"1280x720 (720p)", "1920x1080 (1080p)", "2560x1440 (1440p)", "3840x2160 (4K)", "Native Host Display"});
-    resolutionCombo->setCurrentIndex(1);
-
-    framerateCombo = new QComboBox(this);
-    framerateCombo->addItems({"30 FPS", "60 FPS", "90 FPS", "120 FPS", "144 FPS"});
-    framerateCombo->setCurrentIndex(1);
-
-    aspectRatioCombo = new QComboBox(this);
-    aspectRatioCombo->addItems({"16:9 Standard", "16:10 Widescreen", "21:9 Ultrawide", "32:9 Super Ultrawide"});
-
-    QHBoxLayout *bitrateLayout = new QHBoxLayout();
-    bitrateSlider = new QSlider(Qt::Horizontal, this);
-    bitrateSlider->setRange(1, 150);
-    bitrateSlider->setValue(45);
-    bitrateSpinBox = new QSpinBox(this);
-    bitrateSpinBox->setRange(1, 150);
-    bitrateSpinBox->setValue(45);
-    bitrateSpinBox->setSuffix(" Mbps");
-
-    bitrateLayout->addWidget(bitrateSlider);
-    bitrateLayout->addWidget(bitrateSpinBox);
-
-    connect(bitrateSlider, &QSlider::valueChanged, this, &MainWindow::handleBitrateSliderChange);
-    connect(bitrateSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::handleBitrateSpinBoxChange);
-
-    codecCombo = new QComboBox(this);
-    codecCombo->addItems({"H.264 / AVC", "H.265 / HEVC", "AV1 Next-Gen"});
-    codecCombo->setCurrentIndex(1);
-
-    hwDecodingCheckBox = new QCheckBox("Enable Hardware Acceleration (NVDEC / QuickSync / AMF)", this);
-    hwDecodingCheckBox->setChecked(true);
-
-    vsyncCheckBox = new QCheckBox("Enable VSync & Frame Pacing", this);
-    vsyncCheckBox->setChecked(true);
-
-    formLayout->addRow("Stream Resolution:", resolutionCombo);
-    formLayout->addRow("Target Frame Rate:", framerateCombo);
-    formLayout->addRow("Aspect Ratio:", aspectRatioCombo);
-    formLayout->addRow("Target Bitrate:", bitrateLayout);
-    formLayout->addRow("Video Codec:", codecCombo);
-    formLayout->addRow("Hardware Acceleration:", hwDecodingCheckBox);
-    formLayout->addRow("VSync Sync:", vsyncCheckBox);
-
-    layout->addWidget(displayGroup);
-
-    QGroupBox *duoGroup = new QGroupBox("DuoStream (Virtual Displays)", tab);
-    QVBoxLayout *duoLayout = new QVBoxLayout(duoGroup);
-
-    QHBoxLayout *instMgmtLayout = new QHBoxLayout();
-    duoInstanceCombo = new QComboBox(this);
-    QPushButton *newInstBtn = new QPushButton("New", this);
-    QPushButton *deleteInstBtn = new QPushButton("Delete", this);
-    QPushButton *startInstBtn = new QPushButton("Start", this);
-    QPushButton *stopInstBtn = new QPushButton("Stop", this);
-    QPushButton *openSunshineBtn = new QPushButton("Open Sunshine", this);
-    QPushButton *pairClientBtn = new QPushButton("Pair Client", this);
-
-    instMgmtLayout->addWidget(new QLabel("Active Instance:", this));
-    instMgmtLayout->addWidget(duoInstanceCombo, 1);
-    instMgmtLayout->addWidget(newInstBtn);
-    instMgmtLayout->addWidget(deleteInstBtn);
-    instMgmtLayout->addWidget(startInstBtn);
-    instMgmtLayout->addWidget(stopInstBtn);
-    instMgmtLayout->addWidget(openSunshineBtn);
-    instMgmtLayout->addWidget(pairClientBtn);
-    duoLayout->addLayout(instMgmtLayout);
-
-    QHBoxLayout *columnsLayout = new QHBoxLayout();
-    QVBoxLayout *leftCol = new QVBoxLayout();
-
-    QGroupBox *globalSettingsGroup = new QGroupBox("Global Settings", this);
-    QFormLayout *globalForm = new QFormLayout(globalSettingsGroup);
-    duoStartWithWindowsCheck = new QCheckBox("Start with Windows", this);
-    duoHidIsolationCheck = new QCheckBox("HID Isolation", this);
-    duoProcessPatchingCheck = new QCheckBox("Process Patching", this);
-    duoIsolateStreamCheck = new QCheckBox("Isolate Stream", this);
-    duoWebPortEdit = new QLineEdit(this);
-    duoWebPortEdit->setPlaceholderText("38299");
-    duoVerbosityCombo = new QComboBox(this);
-    duoVerbosityCombo->addItems({"Error", "Warning", "Info", "Debug"});
-    duoVerbosityCombo->setCurrentIndex(2);
-
-    globalForm->addRow(duoStartWithWindowsCheck);
-    globalForm->addRow(duoHidIsolationCheck);
-    globalForm->addRow(duoProcessPatchingCheck);
-    globalForm->addRow(duoIsolateStreamCheck);
-    globalForm->addRow("Web UI Port:", duoWebPortEdit);
-    globalForm->addRow("Log Verbosity:", duoVerbosityCombo);
-    leftCol->addWidget(globalSettingsGroup);
-
-    QGroupBox *userSettingsGroup = new QGroupBox("User Settings", this);
-    QFormLayout *userForm = new QFormLayout(userSettingsGroup);
-    duoUserCombo = new QComboBox(this);
-    duoPasswordEdit = new QLineEdit(this);
-    duoPasswordEdit->setEchoMode(QLineEdit::Password);
-    QPushButton *testCredsBtn = new QPushButton("Test User Credentials", this);
-
-    userForm->addRow("User Name:", duoUserCombo);
-    userForm->addRow("Password:", duoPasswordEdit);
-    userForm->addRow(testCredsBtn);
-    leftCol->addWidget(userSettingsGroup);
-
-    columnsLayout->addLayout(leftCol);
-
-    QVBoxLayout *rightCol = new QVBoxLayout();
-
-    QGroupBox *instSettingsGroup = new QGroupBox("Instance Settings", this);
-    QFormLayout *instForm = new QFormLayout(instSettingsGroup);
-    duoDisplayNameEdit = new QLineEdit(this);
-    duoPortEdit = new QLineEdit(this);
-    duoPortEdit->setPlaceholderText("44282");
-    duoStartWithServiceCheck = new QCheckBox("Start with Service", this);
-    QPushButton *autoStartAppsBtn = new QPushButton("AutoStart Applications", this);
-
-    instForm->addRow("Display Name:", duoDisplayNameEdit);
-    instForm->addRow("Port:", duoPortEdit);
-    instForm->addRow(duoStartWithServiceCheck);
-    instForm->addRow(autoStartAppsBtn);
-    rightCol->addWidget(instSettingsGroup);
-
-    QGroupBox *dispSettingsGroup = new QGroupBox("Display Settings", this);
-    QFormLayout *dispForm = new QFormLayout(dispSettingsGroup);
-    duoAdapterCombo = new QComboBox(this);
-    duoScaleTypeCombo = new QComboBox(this);
-    duoScaleTypeCombo->addItems({"Dynamic", "Static"});
-
-    QHBoxLayout *scaleSliderLayout = new QHBoxLayout();
-    duoScaleSlider = new QSlider(Qt::Horizontal, this);
-    duoScaleSlider->setRange(100, 200);
-    duoScaleSlider->setValue(100);
-    duoScaleLabel = new QLabel("100%", this);
-    scaleSliderLayout->addWidget(duoScaleSlider);
-    scaleSliderLayout->addWidget(duoScaleLabel);
-
-    QHBoxLayout *ssSliderLayout = new QHBoxLayout();
-    duoSuperSamplingSlider = new QSlider(Qt::Horizontal, this);
-    duoSuperSamplingSlider->setRange(100, 200);
-    duoSuperSamplingSlider->setValue(100);
-    duoSuperSamplingLabel = new QLabel("100%", this);
-    ssSliderLayout->addWidget(duoSuperSamplingSlider);
-    ssSliderLayout->addWidget(duoSuperSamplingLabel);
-
-    QHBoxLayout *whiteSliderLayout = new QHBoxLayout();
-    duoSdrWhiteLevelSlider = new QSlider(Qt::Horizontal, this);
-    duoSdrWhiteLevelSlider->setRange(80, 480);
-    duoSdrWhiteLevelSlider->setValue(80);
-    duoSdrWhiteLevelLabel = new QLabel("80 nits", this);
-    whiteSliderLayout->addWidget(duoSdrWhiteLevelSlider);
-    whiteSliderLayout->addWidget(duoSdrWhiteLevelLabel);
-
-    duoForceSdrCheck = new QCheckBox("Force SDR in HDR Streams", this);
-
-    dispForm->addRow("Render Adapter:", duoAdapterCombo);
-    dispForm->addRow("Desktop Scale:", duoScaleTypeCombo);
-    dispForm->addRow("Static Scale:", scaleSliderLayout);
-    dispForm->addRow("Super-Sampling:", ssSliderLayout);
-    dispForm->addRow("SDR White-Level:", whiteSliderLayout);
-    dispForm->addRow(duoForceSdrCheck);
-    rightCol->addWidget(dispSettingsGroup);
-
-    columnsLayout->addLayout(rightCol);
-    duoLayout->addLayout(columnsLayout);
-    layout->addWidget(duoGroup);
-
-    layout->addStretch();
-
-    connect(duoInstanceCombo, &QComboBox::currentTextChanged, this, &MainWindow::handleDuoInstanceChanged);
-    connect(newInstBtn, &QPushButton::clicked, this, &MainWindow::handleDuoNewInstance);
-    connect(deleteInstBtn, &QPushButton::clicked, this, &MainWindow::handleDuoDeleteInstance);
-    connect(startInstBtn, &QPushButton::clicked, this, &MainWindow::handleDuoStartInstance);
-    connect(stopInstBtn, &QPushButton::clicked, this, &MainWindow::handleDuoStopInstance);
-    connect(openSunshineBtn, &QPushButton::clicked, this, &MainWindow::handleDuoOpenSunshine);
-    connect(pairClientBtn, &QPushButton::clicked, this, &MainWindow::handleDuoPairClient);
-    connect(testCredsBtn, &QPushButton::clicked, this, &MainWindow::handleDuoTestCredentials);
-    connect(autoStartAppsBtn, &QPushButton::clicked, this, &MainWindow::handleDuoAutoStartApps);
-    connect(duoScaleTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::handleDuoScaleTypeChanged);
-
-    connect(duoScaleSlider, &QSlider::valueChanged, this, [this](int val) { duoScaleLabel->setText(QString("%1%").arg(val)); });
-    connect(duoSuperSamplingSlider, &QSlider::valueChanged, this, [this](int val) { duoSuperSamplingLabel->setText(QString("%1%").arg(val)); });
-    connect(duoSdrWhiteLevelSlider, &QSlider::valueChanged, this, [this](int val) { duoSdrWhiteLevelLabel->setText(QString("%1 nits").arg(val)); });
+            logWindow->appendLog("INFO", QString("Starting Audio Relay: Streaming to %1:48100, Receiving on port 48100...").arg(ipStr));
+            
+            audioRelayManager->startStreaming(inputDevice, targetIp, 48100, sampleRate, 2);
+            audioRelayManager->startReceiving(outputDevice, 48100);
+        } else {
+            logWindow->appendLog("INFO", "Stopping Audio Relay.");
+            audioRelayManager->stopAll();
+        }
+    });
 
     return tab;
 }
@@ -689,6 +523,8 @@ void MainWindow::handleToggleDeviceAttach(int row) {
     QPushButton *btn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 3));
     if (!btn) return;
 
+    btn->setEnabled(false);
+
     QString ip   = hostIpLineEdit->text().trimmed();
     QString port = portLineEdit->text().trimmed();
 
@@ -698,6 +534,7 @@ void MainWindow::handleToggleDeviceAttach(int row) {
             if (hubPort < 1) {
                 QMessageBox::warning(this, "Detach Failed", QString("Device %1 is not recorded as attached.").arg(busid));
                 logWindow->appendLog("WARNING", QString("Device %1 is not recorded as attached; skipping detach.").arg(busid));
+                btn->setEnabled(true);
                 return;
             }
 
@@ -705,6 +542,7 @@ void MainWindow::handleToggleDeviceAttach(int row) {
             if (!dev) {
                 QMessageBox::critical(this, "Driver Error", "Failed to open VHCI driver. Is the UDE driver loaded?");
                 logWindow->appendLog("ERROR", "vhci::open() failed — is the UDE driver loaded?");
+                btn->setEnabled(true);
                 return;
             }
 
@@ -714,15 +552,20 @@ void MainWindow::handleToggleDeviceAttach(int row) {
                 DWORD err = GetLastError();
                 QMessageBox::warning(this, "Detach Failed", QString("Failed to detach device on bus %1. Error code: %2").arg(busid).arg(err));
                 logWindow->appendLog("ERROR", QString("vhci::detach() failed (error %1).").arg(err));
+                btn->setEnabled(true);
                 return;
             }
 
             attachedPorts.remove(busid);
+            desiredAttachedDevices.remove(busid);
+            reconnectTracker.remove(busid);
+
             if (row < usbDeviceTable->rowCount()) {
                 usbDeviceTable->item(row, 2)->setText("Available");
                 btn->setText("Attach");
             }
             logWindow->appendLog("INFO", QString("Detached device on bus %1.").arg(busid));
+            btn->setEnabled(true);
             return;
         }
 
@@ -731,6 +574,7 @@ void MainWindow::handleToggleDeviceAttach(int row) {
         if (!dev) {
             QMessageBox::critical(this, "Driver Error", "Failed to open VHCI driver. Is the UDE driver loaded?");
             logWindow->appendLog("ERROR", "vhci::open() failed — is the UDE driver loaded?");
+            btn->setEnabled(true);
             return;
         }
 
@@ -747,10 +591,14 @@ void MainWindow::handleToggleDeviceAttach(int row) {
             DWORD err = GetLastError();
             QMessageBox::warning(this, "Attach Failed", QString("Failed to attach device on bus %1. Error code: %2").arg(busid).arg(err));
             logWindow->appendLog("ERROR", QString("vhci::attach() failed (error %1).").arg(err));
+            btn->setEnabled(true);
             return;
         }
 
         attachedPorts[busid] = hubPort;
+        desiredAttachedDevices.insert(busid);
+        reconnectTracker.remove(busid);
+
         if (row < usbDeviceTable->rowCount()) {
             usbDeviceTable->item(row, 2)->setText("Attached (Native)");
             btn->setText("Detach");
@@ -764,6 +612,8 @@ void MainWindow::handleToggleDeviceAttach(int row) {
         QMessageBox::warning(this, "Error", "Unknown SDK exception in attach/detach.");
         logWindow->appendLog("ERROR", "Unknown SDK exception in attach/detach.");
     }
+
+    btn->setEnabled(true);
 }
 
 void MainWindow::handleResetDeviceConnection(int row) {
@@ -772,6 +622,11 @@ void MainWindow::handleResetDeviceConnection(int row) {
     QString busid = usbDeviceTable->item(row, 0)->data(Qt::UserRole).toString();
     QString ip    = hostIpLineEdit->text().trimmed();
     QString port  = portLineEdit->text().trimmed();
+
+    QPushButton *attachBtn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 3));
+    QPushButton *resetBtn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 4));
+    if (attachBtn) attachBtn->setEnabled(false);
+    if (resetBtn) resetBtn->setEnabled(false);
 
     logWindow->appendLog("INFO", QString("Resetting connection for bus %1 — detaching...").arg(busid));
 
@@ -785,36 +640,43 @@ void MainWindow::handleResetDeviceConnection(int row) {
             if (!dev) {
                 QMessageBox::critical(this, "Driver Error", "Failed to open VHCI driver during reset.");
                 logWindow->appendLog("ERROR", "vhci::open() failed during reset.");
+                if (attachBtn) attachBtn->setEnabled(true);
+                if (resetBtn) resetBtn->setEnabled(true);
                 return;
             }
             if (!usbip::vhci::detach(dev.get(), hubPort)) {
                 DWORD err = GetLastError();
                 QMessageBox::warning(this, "Reset Failed", QString("Failed to detach device during reset. Error code: %1").arg(err));
                 logWindow->appendLog("ERROR", QString("vhci::detach() failed during reset (error %1).").arg(err));
+                if (attachBtn) attachBtn->setEnabled(true);
+                if (resetBtn) resetBtn->setEnabled(true);
                 return;
             }
             attachedPorts.remove(busid);
             if (row < usbDeviceTable->rowCount()) {
                 usbDeviceTable->item(row, 2)->setText("Available");
-                if (QPushButton *b = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 3)))
-                    b->setText("Attach");
+                if (attachBtn) attachBtn->setText("Attach");
             }
             logWindow->appendLog("INFO", QString("Detached bus %1 for reset.").arg(busid));
         }
     } catch (const std::exception &ex) {
         QMessageBox::warning(this, "Error", QString("SDK exception during reset detach: %1").arg(ex.what()));
         logWindow->appendLog("ERROR", QString("SDK exception during reset detach: %1").arg(ex.what()));
+        if (attachBtn) attachBtn->setEnabled(true);
+        if (resetBtn) resetBtn->setEnabled(true);
         return;
     }
 
     // Re-attach after 2 seconds
-    QTimer::singleShot(2000, this, [this, ip, port, busid, row]() {
+    QTimer::singleShot(2000, this, [this, ip, port, busid, row, attachBtn, resetBtn]() {
         logWindow->appendLog("INFO", QString("Re-attaching bus %1 to %2...").arg(busid, ip));
         try {
             usbip::Handle dev = usbip::vhci::open();
             if (!dev) {
                 QMessageBox::critical(this, "Driver Error", "Failed to open VHCI driver during reset re-attach.");
                 logWindow->appendLog("ERROR", "vhci::open() failed during reset re-attach.");
+                if (attachBtn) attachBtn->setEnabled(true);
+                if (resetBtn) resetBtn->setEnabled(true);
                 return;
             }
 
@@ -829,20 +691,24 @@ void MainWindow::handleResetDeviceConnection(int row) {
                 DWORD err = GetLastError();
                 QMessageBox::warning(this, "Reconnection Failed", QString("Failed to reconnect device. Error code: %1").arg(err));
                 logWindow->appendLog("ERROR", QString("vhci::attach() failed during reset (error %1).").arg(err));
+                if (attachBtn) attachBtn->setEnabled(true);
+                if (resetBtn) resetBtn->setEnabled(true);
                 return;
             }
 
             attachedPorts[busid] = hubPort;
             if (row < usbDeviceTable->rowCount()) {
                 usbDeviceTable->item(row, 2)->setText("Attached (Native)");
-                if (QPushButton *b = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 3)))
-                    b->setText("Detach");
+                if (attachBtn) attachBtn->setText("Detach");
             }
             logWindow->appendLog("INFO", QString("Re-attached bus %1 on hub port %2.").arg(busid).arg(hubPort));
         } catch (const std::exception &ex) {
             QMessageBox::warning(this, "Error", QString("SDK exception during reset re-attach: %1").arg(ex.what()));
             logWindow->appendLog("ERROR", QString("SDK exception during reset re-attach: %1").arg(ex.what()));
         }
+
+        if (attachBtn) attachBtn->setEnabled(true);
+        if (resetBtn) resetBtn->setEnabled(true);
     });
 }
 
@@ -879,22 +745,10 @@ void MainWindow::handleProfileChange(const QString &profileName) {
     currentProfile = profileName;
     loadProfileSettings(currentProfile);
     
-    QSettings settings("OmniStream", "OmniStreamClient");
+    QSettings settings("USBIPClient", "USBIPClient");
     settings.setValue("profiles/active", currentProfile);
     
     logWindow->appendLog("INFO", QString("Switched to profile: %1").arg(profileName));
-}
-
-void MainWindow::handleBitrateSliderChange(int value) {
-    bitrateSpinBox->blockSignals(true);
-    bitrateSpinBox->setValue(value);
-    bitrateSpinBox->blockSignals(false);
-}
-
-void MainWindow::handleBitrateSpinBoxChange(int value) {
-    bitrateSlider->blockSignals(true);
-    bitrateSlider->setValue(value);
-    bitrateSlider->blockSignals(false);
 }
 
 void MainWindow::applyTheme(const QString &themeName) {
@@ -954,7 +808,7 @@ int MainWindow::findAttachedPort(const QString &busid) const {
 }
 
 QString MainWindow::getDriverPath() {
-    QSettings settings("OmniStream", "OmniStreamClient");
+    QSettings settings("USBIPClient", "USBIPClient");
     QString defaultPath = QCoreApplication::applicationDirPath() + "/Drivers";
     QString configuredPath = settings.value("paths/drivers", defaultPath).toString();
 
@@ -986,8 +840,8 @@ bool MainWindow::checkAndConfigureDrivers() {
 
     if (!driversInstalled) {
         logWindow->appendLog("INFO", "USB/IP kernel driver services not detected in registry. Installing...");
-        QString udeInf    = driverDir + "/usbip2_ude.inf";
-        QString filterInf = driverDir + "/usbip2_filter.inf";
+        QString udeInf    = QDir::toNativeSeparators(driverDir + "/usbip2_ude.inf");
+        QString filterInf = QDir::toNativeSeparators(driverDir + "/usbip2_filter.inf");
 
         QProcess::execute("InfDefaultInstall.exe", QStringList() << udeInf);
         QProcess::execute("InfDefaultInstall.exe", QStringList() << filterInf);
@@ -997,7 +851,7 @@ bool MainWindow::checkAndConfigureDrivers() {
     }
 
     // Ensure the ROOT\USBIP_WIN2\UDE virtual host controller node exists
-    QString usbipPath = driverDir + "/usbip.exe";
+    QString usbipPath = QDir::toNativeSeparators(driverDir + "/usbip.exe");
     QProcess *installProc = new QProcess(this);
     installProc->setWorkingDirectory(driverDir);
 
@@ -1092,6 +946,10 @@ void MainWindow::syncDeviceState() {
             bool found = attachedPorts.contains(busid);
 
             QPushButton *btn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 3));
+            if (btn && !btn->isEnabled()) {
+                continue; // Skip updating if an operation is in progress
+            }
+
             if (found) {
                 usbDeviceTable->setItem(row, 2, new QTableWidgetItem("Attached (Native)"));
                 usbDeviceTable->item(row, 2)->setForeground(QBrush(QColor("#00ffcc")));
@@ -1099,414 +957,27 @@ void MainWindow::syncDeviceState() {
             } else {
                 usbDeviceTable->setItem(row, 2, new QTableWidgetItem("Available"));
                 if (btn) btn->setText("Attach");
+
+                // Auto-reconnect logic
+                if (desiredAttachedDevices.contains(busid)) {
+                    ReconnectInfo &info = reconnectTracker[busid];
+                    QDateTime now = QDateTime::currentDateTime();
+                    if (info.attempts < 3 && (!info.lastAttempt.isValid() || info.lastAttempt.secsTo(now) >= 10)) {
+                        info.attempts++;
+                        info.lastAttempt = now;
+                        logWindow->appendLog("WARNING", QString("Device on bus %1 disconnected unexpectedly. Auto-reconnect attempt %2/3...").arg(busid).arg(info.attempts));
+                        
+                        QTimer::singleShot(0, this, [this, row]() {
+                            handleToggleDeviceAttach(row);
+                        });
+                    } else if (info.attempts >= 3) {
+                        logWindow->appendLog("ERROR", QString("Auto-reconnect failed for device on bus %1 after 3 attempts. Giving up.").arg(busid));
+                        desiredAttachedDevices.remove(busid);
+                        reconnectTracker.remove(busid);
+                    }
+                }
             }
         }
     } catch (...) {
     }
-}
-
-void MainWindow::handleDuoInstanceChanged(const QString &name) {
-    if (name.isEmpty()) return;
-    loadDuoInstanceSettings(name);
-}
-
-void MainWindow::handleDuoNewInstance() {
-    bool ok = false;
-    QString name = QInputDialog::getText(this, "New Instance", "Enter instance name:", QLineEdit::Normal, "", &ok);
-    if (!ok || name.trimmed().isEmpty()) return;
-    
-    name = name.trimmed();
-    if (duoInstanceCombo->findText(name) >= 0) {
-        QMessageBox::warning(this, "Instance Exists", "An instance with this name already exists.");
-        return;
-    }
-    
-    QSettings settings("HKEY_LOCAL_MACHINE\\SOFTWARE\\Duo\\Instances\\" + name, QSettings::NativeFormat);
-    settings.setValue("DisplayName", name);
-    settings.setValue("Port", 44282);
-    settings.setValue("Enabled", 1);
-    settings.setValue("Sandboxed", 0);
-    settings.setValue("ScaleFactor", 100);
-    settings.setValue("SuperSamplingFactor", 100);
-    settings.setValue("ForceSDR", 0);
-    settings.setValue("SDRWhiteLevel", 80);
-    settings.setValue("HideVMSuffix", 0);
-    settings.setValue("IsScaleFactorStatic", 1);
-    
-    duoInstanceCombo->addItem(name);
-    duoInstanceCombo->setCurrentText(name);
-}
-
-void MainWindow::handleDuoDeleteInstance() {
-    QString name = duoInstanceCombo->currentText();
-    if (name.isEmpty()) return;
-    
-    QMessageBox::StandardButton reply = QMessageBox::question(
-        this, "Delete Instance", QString("Are you sure you want to delete instance '%1'?").arg(name),
-        QMessageBox::Yes | QMessageBox::No
-    );
-    if (reply != QMessageBox::Yes) return;
-    
-    QSettings settings("HKEY_LOCAL_MACHINE\\SOFTWARE\\Duo\\Instances", QSettings::NativeFormat);
-    settings.remove(name);
-    
-    loadDuoInstances();
-}
-
-void MainWindow::handleDuoStartInstance() {
-    QString name = duoInstanceCombo->currentText();
-    if (name.isEmpty()) return;
-    
-    saveDuoInstanceSettings(name);
-    saveDuoGlobalSettings();
-    
-    QString port = duoWebPortEdit->text().trimmed();
-    if (port.isEmpty()) port = "38299";
-    QUrl url(QString("http://localhost:%1/instances/%2/start").arg(port, name));
-    
-    QNetworkAccessManager *mgr = new QNetworkAccessManager(this);
-    QNetworkRequest req(url);
-    QNetworkReply *reply = mgr->get(req);
-    
-    connect(reply, &QNetworkReply::finished, this, [this, reply, name]() {
-        if (reply->error() == QNetworkReply::NoError) {
-            logWindow->appendLog("INFO", QString("Successfully started Duo instance '%1'.").arg(name));
-        } else {
-            QMessageBox::warning(this, "Start Failed", QString("Failed to start instance '%1'. Error: %2").arg(name, reply->errorString()));
-            logWindow->appendLog("ERROR", QString("Failed to start instance '%1': %2").arg(name, reply->errorString()));
-        }
-        reply->deleteLater();
-    });
-}
-
-void MainWindow::handleDuoStopInstance() {
-    QString name = duoInstanceCombo->currentText();
-    if (name.isEmpty()) return;
-    
-    QString port = duoWebPortEdit->text().trimmed();
-    if (port.isEmpty()) port = "38299";
-    QUrl url(QString("http://localhost:%1/instances/%2/stop").arg(port, name));
-    
-    QNetworkAccessManager *mgr = new QNetworkAccessManager(this);
-    QNetworkRequest req(url);
-    QNetworkReply *reply = mgr->get(req);
-    
-    connect(reply, &QNetworkReply::finished, this, [this, reply, name]() {
-        if (reply->error() == QNetworkReply::NoError) {
-            logWindow->appendLog("INFO", QString("Successfully stopped Duo instance '%1'.").arg(name));
-        } else {
-            QMessageBox::warning(this, "Stop Failed", QString("Failed to stop instance '%1'. Error: %2").arg(name, reply->errorString()));
-            logWindow->appendLog("ERROR", QString("Failed to stop instance '%1': %2").arg(name, reply->errorString()));
-        }
-        reply->deleteLater();
-    });
-}
-
-void MainWindow::handleDuoOpenSunshine() {
-    QString port = duoPortEdit->text().trimmed();
-    if (port.isEmpty()) port = "44282";
-    QUrl url(QString("https://localhost:%1").arg(port));
-    QDesktopServices::openUrl(url);
-}
-
-void MainWindow::handleDuoPairClient() {
-    QString port = duoPortEdit->text().trimmed();
-    if (port.isEmpty()) port = "44282";
-    QUrl url(QString("https://localhost:%1/pin").arg(port));
-    QDesktopServices::openUrl(url);
-}
-
-void MainWindow::handleDuoTestCredentials() {
-    QString username = duoUserCombo->currentText();
-    QString password = duoPasswordEdit->text();
-    
-    logWindow->appendLog("INFO", QString("Testing credentials for user '%1'...").arg(username));
-    
-    HANDLE hToken = nullptr;
-    bool success = LogonUserW(
-        username.toStdWString().c_str(),
-        L".",
-        password.toStdWString().c_str(),
-        LOGON32_LOGON_INTERACTIVE,
-        LOGON32_PROVIDER_DEFAULT,
-        &hToken
-    );
-    
-    if (success) {
-        CloseHandle(hToken);
-        QMessageBox::information(this, "Credentials Valid", "User credentials are valid!");
-        logWindow->appendLog("INFO", "User credentials verified successfully.");
-    } else {
-        DWORD err = GetLastError();
-        QMessageBox::warning(this, "Credentials Invalid", QString("Failed to verify credentials. Error code: %1").arg(err));
-        logWindow->appendLog("ERROR", QString("Failed to verify credentials. Error code: %1").arg(err));
-    }
-}
-
-void MainWindow::handleDuoAutoStartApps() {
-    QString path = "C:/Program Files/Duo/config/apps.json";
-    QFileInfo checkFile(path);
-    if (!checkFile.exists()) {
-        path = QCoreApplication::applicationDirPath() + "/Duo/config/apps.json";
-    }
-    QDesktopServices::openUrl(QUrl::fromLocalFile(path));
-}
-
-void MainWindow::handleDuoScaleTypeChanged(int index) {
-    bool isStatic = (index == 1);
-    duoScaleSlider->setVisible(isStatic);
-    duoScaleLabel->setVisible(isStatic);
-}
-
-void MainWindow::loadDuoInstances() {
-    QSettings settings("HKEY_LOCAL_MACHINE\\SOFTWARE\\Duo\\Instances", QSettings::NativeFormat);
-    QStringList childKeys = settings.childGroups();
-    
-    duoInstanceCombo->blockSignals(true);
-    duoInstanceCombo->clear();
-    duoInstanceCombo->addItems(childKeys);
-    duoInstanceCombo->blockSignals(false);
-    
-    if (duoInstanceCombo->count() > 0) {
-        duoInstanceCombo->setCurrentIndex(0);
-        loadDuoInstanceSettings(duoInstanceCombo->currentText());
-    } else {
-        setDuoInstanceControlsEnabled(false);
-    }
-}
-
-void MainWindow::loadDuoInstanceSettings(const QString &name) {
-    if (name.isEmpty()) return;
-    
-    QSettings settings("HKEY_LOCAL_MACHINE\\SOFTWARE\\Duo\\Instances\\" + name, QSettings::NativeFormat);
-    
-    duoDisplayNameEdit->setText(settings.value("DisplayName", name).toString());
-    duoPortEdit->setText(settings.value("Port", 44282).toString());
-    duoStartWithServiceCheck->setChecked(settings.value("Enabled", 1).toInt() == 1);
-    
-    QString user = settings.value("UserName", "").toString();
-    int userIndex = duoUserCombo->findText(user);
-    if (userIndex >= 0) {
-        duoUserCombo->setCurrentIndex(userIndex);
-    }
-    
-    QString encryptedPass = settings.value("Password", "").toString();
-    if (!encryptedPass.isEmpty()) {
-        duoPasswordEdit->setText(decryptPassword(encryptedPass));
-    } else {
-        duoPasswordEdit->clear();
-    }
-    
-    QString adapter = settings.value("RenderAdapter", "").toString();
-    int adapterIndex = duoAdapterCombo->findText(adapter);
-    if (adapterIndex >= 0) {
-        duoAdapterCombo->setCurrentIndex(adapterIndex);
-    }
-    
-    int isStatic = settings.value("IsScaleFactorStatic", 1).toInt();
-    duoScaleTypeCombo->setCurrentIndex(isStatic == 1 ? 1 : 0);
-    
-    int scale = settings.value("ScaleFactor", 100).toInt();
-    duoScaleSlider->setValue(scale);
-    
-    int superSampling = settings.value("SuperSamplingFactor", 100).toInt();
-    duoSuperSamplingSlider->setValue(superSampling);
-    
-    int whiteLevel = settings.value("SDRWhiteLevel", 80).toInt();
-    duoSdrWhiteLevelSlider->setValue(whiteLevel);
-    
-    duoForceSdrCheck->setChecked(settings.value("ForceSDR", 0).toInt() == 1);
-    
-    setDuoInstanceControlsEnabled(true);
-    handleDuoScaleTypeChanged(isStatic == 1 ? 1 : 0);
-}
-
-void MainWindow::saveDuoInstanceSettings(const QString &name) {
-    if (name.isEmpty()) return;
-    
-    QSettings settings("HKEY_LOCAL_MACHINE\\SOFTWARE\\Duo\\Instances\\" + name, QSettings::NativeFormat);
-    
-    settings.setValue("DisplayName", duoDisplayNameEdit->text().trimmed());
-    settings.setValue("Port", duoPortEdit->text().toUInt());
-    settings.setValue("Enabled", duoStartWithServiceCheck->isChecked() ? 1 : 0);
-    settings.setValue("UserName", duoUserCombo->currentText());
-    
-    QString pass = duoPasswordEdit->text();
-    if (!pass.isEmpty()) {
-        settings.setValue("Password", encryptPassword(pass));
-    } else {
-        settings.setValue("Password", "");
-    }
-    
-    settings.setValue("RenderAdapter", duoAdapterCombo->currentText());
-    settings.setValue("IsScaleFactorStatic", duoScaleTypeCombo->currentIndex() == 1 ? 1 : 0);
-    settings.setValue("ScaleFactor", duoScaleSlider->value());
-    settings.setValue("SuperSamplingFactor", duoSuperSamplingSlider->value());
-    settings.setValue("SDRWhiteLevel", duoSdrWhiteLevelSlider->value());
-    settings.setValue("ForceSDR", duoForceSdrCheck->isChecked() ? 1 : 0);
-}
-
-void MainWindow::loadDuoGlobalSettings() {
-    QSettings settings("HKEY_LOCAL_MACHINE\\SOFTWARE\\Duo", QSettings::NativeFormat);
-    
-    duoHidIsolationCheck->setChecked(settings.value("HostHidIsolation", 0).toInt() == 1);
-    duoProcessPatchingCheck->setChecked(settings.value("EnableProcessPatching", 0).toInt() == 1);
-    duoIsolateStreamCheck->setChecked(settings.value("SteamIsolation", 0).toInt() == 1);
-    duoWebPortEdit->setText(settings.value("HostPort", 38299).toString());
-    
-    int verbosity = settings.value("Verbosity", 1).toInt();
-    duoVerbosityCombo->setCurrentIndex(verbosity);
-    
-    SC_HANDLE hSCM = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
-    if (hSCM) {
-        SC_HANDLE hService = OpenServiceW(hSCM, L"DuoService", SERVICE_QUERY_CONFIG);
-        if (hService) {
-            DWORD dwBytesNeeded = 0;
-            QueryServiceConfigW(hService, nullptr, 0, &dwBytesNeeded);
-            if (GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
-                QUERY_SERVICE_CONFIGW *pConfig = (QUERY_SERVICE_CONFIGW*)LocalAlloc(LPTR, dwBytesNeeded);
-                if (pConfig) {
-                    if (QueryServiceConfigW(hService, pConfig, dwBytesNeeded, &dwBytesNeeded)) {
-                        duoStartWithWindowsCheck->setChecked(pConfig->dwStartType == SERVICE_AUTO_START);
-                    }
-                    LocalFree(pConfig);
-                }
-            }
-            CloseServiceHandle(hService);
-        }
-        CloseServiceHandle(hSCM);
-    }
-}
-
-void MainWindow::saveDuoGlobalSettings() {
-    QSettings settings("HKEY_LOCAL_MACHINE\\SOFTWARE\\Duo", QSettings::NativeFormat);
-    
-    settings.setValue("HostHidIsolation", duoHidIsolationCheck->isChecked() ? 1 : 0);
-    settings.setValue("EnableProcessPatching", duoProcessPatchingCheck->isChecked() ? 1 : 0);
-    settings.setValue("SteamIsolation", duoIsolateStreamCheck->isChecked() ? 1 : 0);
-    settings.setValue("HostPort", duoWebPortEdit->text().toUInt());
-    settings.setValue("Verbosity", duoVerbosityCombo->currentIndex());
-    
-    SC_HANDLE hSCM = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
-    if (hSCM) {
-        SC_HANDLE hService = OpenServiceW(hSCM, L"DuoService", SERVICE_CHANGE_CONFIG);
-        if (hService) {
-            ChangeServiceConfigW(
-                hService,
-                SERVICE_NO_CHANGE,
-                duoStartWithWindowsCheck->isChecked() ? SERVICE_AUTO_START : SERVICE_DEMAND_START,
-                SERVICE_NO_CHANGE,
-                nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr
-            );
-            CloseServiceHandle(hService);
-        }
-        CloseServiceHandle(hSCM);
-    }
-}
-
-void MainWindow::populateDuoUsers() {
-    duoUserCombo->clear();
-    
-    DWORD dwLevel = 0;
-    LPUSER_INFO_0 pBuf = nullptr;
-    DWORD dwEntriesRead = 0;
-    DWORD dwTotalEntries = 0;
-    DWORD dwResumeHandle = 0;
-    
-    NET_API_STATUS nStatus = NetUserEnum(
-        nullptr,
-        dwLevel,
-        FILTER_NORMAL_ACCOUNT,
-        (LPBYTE*)&pBuf,
-        MAX_PREFERRED_LENGTH,
-        &dwEntriesRead,
-        &dwTotalEntries,
-        &dwResumeHandle
-    );
-    
-    if (nStatus == NERR_Success || nStatus == ERROR_MORE_DATA) {
-        if (pBuf != nullptr) {
-            for (DWORD i = 0; i < dwEntriesRead; i++) {
-                duoUserCombo->addItem(QString::fromWCharArray(pBuf[i].usri0_name));
-            }
-        }
-    }
-    
-    if (pBuf != nullptr) {
-        NetApiBufferFree(pBuf);
-    }
-    
-    if (duoUserCombo->count() == 0) {
-        wchar_t username[UNLEN + 1];
-        DWORD username_len = UNLEN + 1;
-        if (GetUserNameW(username, &username_len)) {
-            duoUserCombo->addItem(QString::fromWCharArray(username));
-        } else {
-            duoUserCombo->addItem("Administrator");
-        }
-    }
-}
-
-void MainWindow::populateDuoAdapters() {
-    duoAdapterCombo->clear();
-    
-    IDXGIFactory1 *pFactory = nullptr;
-    if (SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&pFactory))) {
-        IDXGIAdapter1 *pAdapter = nullptr;
-        for (UINT i = 0; pFactory->EnumAdapters1(i, &pAdapter) != DXGI_ERROR_NOT_FOUND; ++i) {
-            DXGI_ADAPTER_DESC1 desc;
-            pAdapter->GetDesc1(&desc);
-            duoAdapterCombo->addItem(QString::fromWCharArray(desc.Description));
-            pAdapter->Release();
-        }
-        pFactory->Release();
-    }
-    
-    if (duoAdapterCombo->count() == 0) {
-        duoAdapterCombo->addItem("Default Graphics Adapter");
-    }
-}
-
-void MainWindow::setDuoInstanceControlsEnabled(bool enabled) {
-    duoDisplayNameEdit->setEnabled(enabled);
-    duoPortEdit->setEnabled(enabled);
-    duoStartWithServiceCheck->setEnabled(enabled);
-    duoUserCombo->setEnabled(enabled);
-    duoPasswordEdit->setEnabled(enabled);
-    duoAdapterCombo->setEnabled(enabled);
-    duoScaleTypeCombo->setEnabled(enabled);
-    duoScaleSlider->setEnabled(enabled);
-    duoSuperSamplingSlider->setEnabled(enabled);
-    duoSdrWhiteLevelSlider->setEnabled(enabled);
-    duoForceSdrCheck->setEnabled(enabled);
-}
-
-QString MainWindow::encryptPassword(const QString &password) {
-    DATA_BLOB input;
-    QByteArray utf8 = password.toUtf8();
-    input.pbData = (BYTE*)utf8.constData();
-    input.cbData = utf8.length();
-    
-    DATA_BLOB output;
-    if (CryptProtectData(&input, nullptr, nullptr, nullptr, nullptr, 0, &output)) {
-        QByteArray encrypted((char*)output.pbData, output.cbData);
-        LocalFree(output.pbData);
-        return encrypted.toBase64();
-    }
-    return "";
-}
-
-QString MainWindow::decryptPassword(const QString &base64) {
-    QByteArray encrypted = QByteArray::fromBase64(base64.toUtf8());
-    DATA_BLOB input;
-    input.pbData = (BYTE*)encrypted.constData();
-    input.cbData = encrypted.length();
-    
-    DATA_BLOB output;
-    if (CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr, 0, &output)) {
-        QString decrypted = QString::fromUtf8((char*)output.pbData, output.cbData);
-        LocalFree(output.pbData);
-        return decrypted;
-    }
-    return "";
 }

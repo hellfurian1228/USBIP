@@ -4,7 +4,7 @@
 #include <QClipboard>
 
 LogWindow::LogWindow(QWidget *parent) : QDialog(parent) {
-    setWindowTitle("OmniStream System Logger");
+    setWindowTitle("USBIP Client System Logger");
     resize(700, 450);
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
