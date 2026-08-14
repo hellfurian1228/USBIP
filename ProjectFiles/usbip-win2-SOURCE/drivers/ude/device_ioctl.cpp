@@ -362,7 +362,7 @@ auto repack(_In_ iso_packet_descriptor *d, _In_ const _URB_ISOCH_TRANSFER &r)
                         d->status = 0;
                         length += d->length;
                 } else {
-                        Trace(TRACE_LEVEL_ERROR, "[%lu] next_offset(%lu) >= offset(%lu) && next_offset <= r.TransferBufferLength(%lu)",
+                        Trace(TRACE_LEVEL_ERROR, "[%lu] next_offset(%lu) < offset(%lu) || next_offset > r.TransferBufferLength(%lu)",
                                 i, next_offset, offset, r.TransferBufferLength);
                         return STATUS_INVALID_PARAMETER;
                 }

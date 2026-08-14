@@ -86,7 +86,7 @@ struct device_attributes
 };
 
 /*
- * Context extention for device_ctx. 
+ * Context extension for device_ctx. 
  *
  * TCP/IP connection must be established before creation of UDECXUSBDEVICE because UdecxUsbDeviceInitSetSpeed 
  * must be called prior UdecxUsbDeviceCreate. So, these data can't be stored in device_ctx. 
