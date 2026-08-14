@@ -204,7 +204,7 @@ rem del /F sed*
   - "System failure", "Write debugging information", pick "Automatic Memory Dump" or "Kernel Memory Dump"
   - Check "Overwrite any existing file"
 - Start WPP tracing session for drivers as described in the previous topic
-- When BSOD has occured
+- When BSOD has occurred
   - Reboot PC if automatic reboot is not set
   - Run Windows debugger WinDbg.exe as Administrator
   - Press Ctrl+D to open crash dump in C:\Windows

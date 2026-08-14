@@ -96,7 +96,7 @@ PAGED USBIP_STATUS usbip::recv_op_common(_Inout_ SOCKET *sock, _In_ UINT16 expec
  *
  * Use TransferBufferMDL if it is present: Hardware and lower-level drivers
  * (like the HCD processing requests at DISPATCH_LEVEL) prioritize the MDL.
- * The MDL provides the safe physical memory locking required for DMA) transactions.
+ * The MDL provides the safe physical memory locking required for DMA transactions.
  * If you need a virtual pointer to inspect or write data in your code, use TransferBuffer. 
  * 
  * TransferBufferMDL can be a chain and have size greater than mdl_size. 
