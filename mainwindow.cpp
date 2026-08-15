@@ -810,6 +810,11 @@ int MainWindow::findAttachedPort(const QString &busid) const {
 QString MainWindow::getDriverPath() {
     QSettings settings("USBIPClient", "USBIPClient");
     QString defaultPath = QCoreApplication::applicationDirPath() + "/Drivers";
+    SYSTEM_INFO sysInfo;
+    GetNativeSystemInfo(&sysInfo);
+    if (sysInfo.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64) {
+        defaultPath = QCoreApplication::applicationDirPath() + "/Drivers/ARM64";
+    }
     QString configuredPath = settings.value("paths/drivers", defaultPath).toString();
 
     QFileInfo checkExe(configuredPath + "/usbip.exe");
@@ -868,13 +873,13 @@ bool MainWindow::checkAndConfigureDrivers() {
     connect(installProc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
             [this, installProc](int exitCode, QProcess::ExitStatus) {
         if (exitCode == 0)
-            logWindow->appendLog("INFO", "usbip install: ROOT\\USBIP_WIN2\\UDE node verified/created.");
+            logWindow->appendLog("INFO", "usbip vhci install: ROOT\\\\USBIP_WIN2\\\\UDE node verified/created.");
         else
-            logWindow->appendLog("WARNING", QString("usbip install exited with code %1.").arg(exitCode));
+            logWindow->appendLog("WARNING", QString("usbip vhci install exited with code %1.").arg(exitCode));
         installProc->deleteLater();
     });
 
-    logWindow->appendLog(\"INFO\", \"Running 'usbip vhci install' to verify virtual host controller node...\");
+    logWindow->appendLog("INFO", "Running 'usbip vhci install' to verify virtual host controller node...");
     installProc->start(usbipPath, QStringList() << "vhci" << "install");
 
     return true;

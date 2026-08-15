@@ -122,6 +122,62 @@ add_custom_command(TARGET USBIPClient POST_BUILD
         "$<TARGET_FILE_DIR:USBIPClient>/usb.ids"
 )
 
+# Copy ARM64 binaries and drivers to Drivers/ARM64 folder in build directory
+add_custom_command(TARGET USBIPClient POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64"
+)
+add_custom_command(TARGET USBIPClient POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBipARM64/usbip.exe"
+        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/usbip.exe"
+)
+add_custom_command(TARGET USBIPClient POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBipARM64/devnode.exe"
+        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/devnode.exe"
+)
+add_custom_command(TARGET USBIPClient POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBipARM64/libusbip.dll"
+        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/libusbip.dll"
+)
+add_custom_command(TARGET USBIPClient POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBipARM64/resources.dll"
+        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/resources.dll"
+)
+add_custom_command(TARGET USBIPClient POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_filter.cat"
+        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/usbip2_filter.cat"
+)
+add_custom_command(TARGET USBIPClient POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_filter.inf"
+        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/usbip2_filter.inf"
+)
+add_custom_command(TARGET USBIPClient POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_filter.sys"
+        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/usbip2_filter.sys"
+)
+add_custom_command(TARGET USBIPClient POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_ude.cat"
+        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/usbip2_ude.cat"
+)
+add_custom_command(TARGET USBIPClient POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_ude.inf"
+        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/usbip2_ude.inf"
+)
+add_custom_command(TARGET USBIPClient POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_ude.sys"
+        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/usbip2_ude.sys"
+)
+
 # --- Installation and Packaging Configuration ---
 
 # Install Drivers directory first
@@ -137,6 +193,18 @@ install(FILES "$<TARGET_FILE:libusbip>" DESTINATION Drivers)
 # Install resources.dll to root and Drivers directory
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBip/resources.dll" DESTINATION .)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBip/resources.dll" DESTINATION Drivers)
+
+# Install ARM64 binaries and drivers to Drivers/ARM64
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBipARM64/usbip.exe" DESTINATION Drivers/ARM64)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBipARM64/devnode.exe" DESTINATION Drivers/ARM64)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBipARM64/libusbip.dll" DESTINATION Drivers/ARM64)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBipARM64/resources.dll" DESTINATION Drivers/ARM64)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_filter.cat" DESTINATION Drivers/ARM64)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_filter.inf" DESTINATION Drivers/ARM64)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_filter.sys" DESTINATION Drivers/ARM64)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_ude.cat" DESTINATION Drivers/ARM64)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_ude.inf" DESTINATION Drivers/ARM64)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_ude.sys" DESTINATION Drivers/ARM64)
 
 # Install usb.ids
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/usb.ids" DESTINATION .)
