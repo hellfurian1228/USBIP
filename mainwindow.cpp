@@ -874,8 +874,8 @@ bool MainWindow::checkAndConfigureDrivers() {
         installProc->deleteLater();
     });
 
-    logWindow->appendLog("INFO", "Running 'usbip install' to verify virtual host controller node...");
-    installProc->start(usbipPath, QStringList() << "install");
+    logWindow->appendLog(\"INFO\", \"Running 'usbip vhci install' to verify virtual host controller node...\");
+    installProc->start(usbipPath, QStringList() << "vhci" << "install");
 
     return true;
 }
