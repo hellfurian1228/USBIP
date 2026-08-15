@@ -19,7 +19,7 @@ std::wstring win::get_module_filename()
         std::wstring path(MAX_PATH, L'\0');
 
         for (auto ok = true; ok; ) {
-                auto cch = GetModuleFileName(nullptr, path.data(), static_cast<DWORD>(path.size()));
+                auto cch = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
 
                 if (ok = cch == path.size(); ok) {
                         assert(GetLastError() == ERROR_INSUFFICIENT_BUFFER);
@@ -87,14 +87,14 @@ DWORD win::FileVersion::Impl::SetFile(std::wstring_view path)
                 return ERROR_INVALID_PARAMETER;
         }
 
-        auto sz = GetFileVersionInfoSize(path.data(), nullptr);
+        auto sz = GetFileVersionInfoSizeW(path.data(), nullptr);
         if (!sz) {
                 return GetLastError();
         }
 
         m_info.resize(sz);
 
-        if (!GetFileVersionInfo(path.data(), 0, sz, m_info.data())) {
+        if (!GetFileVersionInfoW(path.data(), 0, sz, m_info.data())) {
                 return GetLastError();
         } 
 
@@ -117,7 +117,7 @@ const void *win::FileVersion::Impl::VerQueryValue(const std::wstring &val, UINT 
         void *buf{};
         buf_sz = 0;
 
-        if (!::VerQueryValue(m_info.data(), val.c_str(), &buf, &buf_sz)) {
+        if (!::VerQueryValueW(m_info.data(), val.c_str(), &buf, &buf_sz)) {
                 throw std::invalid_argument("FileVersion::VerQueryValue");
         }
         
@@ -151,10 +151,10 @@ std::wstring win::FileVersion::Impl::VerLanguageName() const
                 throw std::runtime_error("FileVersion::VerLanguageName: stream in error state");
         }
 
-	auto cnt = ::VerLanguageName(wLang, 0, 0);
+	auto cnt = ::VerLanguageNameW(wLang, 0, 0);
         std::vector<wchar_t> v(cnt);
 
-        cnt = ::VerLanguageName(wLang, v.data(), cnt);
+        cnt = ::VerLanguageNameW(wLang, v.data(), cnt);
         return std::wstring(v.data(), cnt);
 }
 

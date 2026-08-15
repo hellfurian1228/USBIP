@@ -96,6 +96,25 @@ add_custom_command(TARGET USBIPClient POST_BUILD
         "$<TARGET_FILE_DIR:USBIPClient>/Drivers"
 )
 
+# Copy libusbip.dll to Drivers folder in build directory
+add_custom_command(TARGET USBIPClient POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:libusbip>"
+        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/$<TARGET_FILE_NAME:libusbip>"
+)
+
+# Copy resources.dll to build directory and Drivers folder
+add_custom_command(TARGET USBIPClient POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBip/resources.dll"
+        "$<TARGET_FILE_DIR:USBIPClient>/resources.dll"
+)
+add_custom_command(TARGET USBIPClient POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBip/resources.dll"
+        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/resources.dll"
+)
+
 # Copy usb.ids to build directory
 add_custom_command(TARGET USBIPClient POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -105,14 +124,22 @@ add_custom_command(TARGET USBIPClient POST_BUILD
 
 # --- Installation and Packaging Configuration ---
 
-# Install target executable and libusbip DLL
-install(TARGETS USBIPClient libusbip RUNTIME DESTINATION .)
+# Install Drivers directory first
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/" DESTINATION Drivers)
+
+# Install target executable and libusbip DLL to root
+install(TARGETS USBIPClient RUNTIME DESTINATION .)
+install(TARGETS libusbip RUNTIME DESTINATION .)
+
+# Also install libusbip DLL to Drivers directory so usbip.exe can find it
+install(FILES "$<TARGET_FILE:libusbip>" DESTINATION Drivers)
+
+# Install resources.dll to root and Drivers directory
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBip/resources.dll" DESTINATION .)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBip/resources.dll" DESTINATION Drivers)
 
 # Install usb.ids
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/usb.ids" DESTINATION .)
-
-# Install Drivers directory
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/" DESTINATION Drivers)
 
 # Deploy Qt dependencies using windeployqt
 install(CODE "
@@ -123,6 +150,12 @@ install(CODE "
                 \"\${CMAKE_INSTALL_PREFIX}/USBIPClient.exe\"
     )
 ")
+
+# Install MSVC runtime libraries
+include(InstallRequiredSystemLibraries)
+if(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+    install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} DESTINATION .)
+endif()
 
 # CPack Configuration
 set(CPACK_PACKAGE_NAME "USBIP Client")
