@@ -1,5 +1,7 @@
 #include "mainwindow.h"
 #include "audiorelaymanager.h"
+#include "driverinstaller.h"
+#include <algorithm>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -19,10 +21,15 @@
 #include <QNetworkReply>
 #include <QDesktopServices>
 #include <QUrl>
+#include <windows.h>
 #include <lm.h>
 #include <dxgi.h>
 #include <wincrypt.h>
-#include <windows.h>
+
+// usbip_sdk: vhci.h provides Handle/attach/detach, remote.h provides Socket/connect/enum_exportable_devices
+#include <vhci.h>
+#include <remote.h>
+#include "src/usbip_sdk/libusbip/src/usb_ids.h"
 
 #pragma comment(lib, "netapi32.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -30,7 +37,7 @@
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent) {
-    setWindowTitle("USBIP Client v1.0.0");
+    setWindowTitle("USBIP Client v1.0.1");
     resize(1000, 650);
 
     logWindow = new LogWindow(this);
@@ -39,24 +46,15 @@ MainWindow::MainWindow(QWidget *parent)
     setupUi();
 
     loadSettings();
-    checkAndConfigureDrivers();
 
-    try {
-        usbip::Handle dev = usbip::vhci::open();
-        if (dev) {
-            usbip::vhci::set_persistent(dev.get(), std::vector<usbip::persistent_device>());
-        }
-    } catch (...) {}
-
-    libusbip::set_debug_output([this](std::string msg) {
-        logWindow->appendLog("[USBIP-SDK]", QString::fromStdString(msg).trimmed());
-    });
+    QString driverError;
+    if (DriverInstaller::install(&driverError)) {
+        logWindow->appendLog("INFO", "Kernel driver installation succeeded.");
+    } else {
+        logWindow->appendLog("ERROR", QString("Kernel driver installation failed: %1").arg(driverError));
+    }
 
     loadUsbIdDatabase();
-
-    syncTimer = new QTimer(this);
-    connect(syncTimer, &QTimer::timeout, this, &MainWindow::syncDeviceState);
-    syncTimer->start(3000);
 
     trayIcon = new QSystemTrayIcon(this);
     if (QSystemTrayIcon::isSystemTrayAvailable()) {
@@ -93,7 +91,9 @@ MainWindow::MainWindow(QWidget *parent)
     }
 }
 
-MainWindow::~MainWindow() {}
+MainWindow::~MainWindow() {
+    delete usbIdsDb;
+}
 
 void MainWindow::closeEvent(QCloseEvent *event) {
     saveSettings();
@@ -205,8 +205,11 @@ void MainWindow::setupUi() {
     portLineEdit->setFixedWidth(60);
 
     connectButton = new QPushButton("Connect", this);
+    connectButton->setToolTip("Establish a logical connection to the remote USB/IP host.");
     scanHostButton = new QPushButton("Scan Host", this);
+    scanHostButton->setToolTip("Query the host for available and exportable USB devices.");
     loggerButton = new QPushButton("Debug Console", this);
+    loggerButton->setToolTip("Toggle the debug console to view application logs and errors.");
     connectionStatusLabel = new QLabel("Status: Disconnected", this);
 
     topBarLayout->addWidget(ipLabel);
@@ -227,6 +230,16 @@ void MainWindow::setupUi() {
     mainLayout->addLayout(topBarLayout);
     mainLayout->addWidget(tabWidget);
 
+    highBandwidthWarningLabel = new QLabel("Note: A powered USB Hub and stable 5GHz WiFi or Ethernet connection are required for stable use of high-bandwidth devices (e.g., 3D scanners, cameras).", this);
+    highBandwidthWarningLabel->setObjectName("highBandwidthWarningLabel");
+    highBandwidthWarningLabel->setAlignment(Qt::AlignCenter);
+    mainLayout->addWidget(highBandwidthWarningLabel);
+
+    deviceDisconnectWarningLabel = new QLabel("Note: Disconnect attached devices from client before host to prevent errors.", this);
+    deviceDisconnectWarningLabel->setObjectName("deviceDisconnectWarningLabel");
+    deviceDisconnectWarningLabel->setAlignment(Qt::AlignCenter);
+    mainLayout->addWidget(deviceDisconnectWarningLabel);
+
     setCentralWidget(centralWidget);
 
     connect(connectButton, &QPushButton::clicked, this, &MainWindow::handleConnect);
@@ -241,9 +254,12 @@ QWidget* MainWindow::createNetworkTab() {
     QGroupBox *usbGroupBox = new QGroupBox("Remote USB Devices (USB/IP)", tab);
     QVBoxLayout *usbLayout = new QVBoxLayout(usbGroupBox);
 
-    usbDeviceTable = new QTableWidget(0, 5, this);
-    usbDeviceTable->setHorizontalHeaderLabels({"Device Name", "VID:PID", "Status", "Attach Action", "Reset Action"});
+    usbDeviceTable = new QTableWidget(0, 6, this);
+    usbDeviceTable->setHorizontalHeaderLabels({"Fav", "Device Name", "VID:PID", "Status", "Attach Action", "Reset Action"});
+    usbDeviceTable->horizontalHeaderItem(0)->setToolTip("Attach device automatically when connected to host.");
+    usbDeviceTable->horizontalHeaderItem(4)->setToolTip("Mount or unmount this USB device to the Windows kernel.");
     usbDeviceTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    usbDeviceTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
 
     usbLayout->addWidget(usbDeviceTable);
     layout->addWidget(usbGroupBox);
@@ -255,28 +271,41 @@ void MainWindow::addUsbDeviceToTable(const QString &name, const QString &busId, 
     int row = usbDeviceTable->rowCount();
     usbDeviceTable->insertRow(row);
 
+    QWidget *favWidget = new QWidget(this);
+    QHBoxLayout *favLayout = new QHBoxLayout(favWidget);
+    favLayout->setAlignment(Qt::AlignCenter);
+    favLayout->setContentsMargins(0, 0, 0, 0);
+    QCheckBox *favCheck = new QCheckBox(favWidget);
+    favCheck->setChecked(getFavorites().contains(vidPid));
+    connect(favCheck, &QCheckBox::toggled, [this, vidPid](bool checked) { setFavorite(vidPid, checked); });
+    favLayout->addWidget(favCheck);
+    favWidget->setToolTip("Attach device automatically when connected to host.");
+    usbDeviceTable->setCellWidget(row, 0, favWidget);
+
     QTableWidgetItem *nameItem = new QTableWidgetItem(name);
     nameItem->setData(Qt::UserRole, busId);
-    usbDeviceTable->setItem(row, 0, nameItem);
+    usbDeviceTable->setItem(row, 1, nameItem);
 
-    usbDeviceTable->setItem(row, 1, new QTableWidgetItem(vidPid));
-    usbDeviceTable->setItem(row, 2, new QTableWidgetItem(status));
+    usbDeviceTable->setItem(row, 2, new QTableWidgetItem(vidPid));
+    usbDeviceTable->setItem(row, 3, new QTableWidgetItem(status));
 
     QPushButton *attachBtn = new QPushButton(attached ? "Detach" : "Attach", this);
+    attachBtn->setToolTip("Mount or unmount this USB device to the Windows kernel.");
     QPushButton *resetBtn = new QPushButton("Reset Connection", this);
+    resetBtn->setToolTip("Force reset the connection state for this device.");
 
     connect(attachBtn, &QPushButton::clicked, [this, row]() { handleToggleDeviceAttach(row); });
     connect(resetBtn, &QPushButton::clicked, [this, row]() { handleResetDeviceConnection(row); });
 
-    usbDeviceTable->setCellWidget(row, 3, attachBtn);
-    usbDeviceTable->setCellWidget(row, 4, resetBtn);
+    usbDeviceTable->setCellWidget(row, 4, attachBtn);
+    usbDeviceTable->setCellWidget(row, 5, resetBtn);
 }
 
 QWidget* MainWindow::createAudioTab() {
     QWidget *tab = new QWidget(this);
     QVBoxLayout *layout = new QVBoxLayout(tab);
 
-    QGroupBox *audioGroup = new QGroupBox("Audio Relay Engine Settings", tab);
+    QGroupBox *audioGroup = new QGroupBox("Opus Audio Relay Engine", tab);
     QFormLayout *formLayout = new QFormLayout(audioGroup);
 
     enableAudioRelayButton = new QPushButton("Enable Audio Relay Stream", this);
@@ -289,21 +318,16 @@ QWidget* MainWindow::createAudioTab() {
     audioOutputDeviceCombo->addItems(audioRelayManager->getAvailableOutputDevices());
 
     audioQualityCombo = new QComboBox(this);
-    audioQualityCombo->addItems({"Low Latency (64 kbps)", "Balanced (128 kbps)", "High Fidelity (256 kbps)", "Lossless Uncompressed"});
-    audioQualityCombo->setCurrentIndex(2);
+    audioQualityCombo->addItems({"Low Latency (64 kbps)", "Balanced (128 kbps)", "High Fidelity (256 kbps)"});
+    audioQualityCombo->setCurrentIndex(1);
 
-    audioSampleRateCombo = new QComboBox(this);
-    audioSampleRateCombo->addItems({"44100 Hz", "48000 Hz", "96000 Hz"});
-    audioSampleRateCombo->setCurrentIndex(1);
-
-    audioBufferSlider = new QSlider(Qt::Horizontal, this);
-    audioBufferSlider->setRange(5, 100);
-    audioBufferSlider->setValue(20);
-    audioBufferLabel = new QLabel("Buffer Size: 20 ms", this);
-
-    connect(audioBufferSlider, &QSlider::valueChanged, [this](int val) {
-        audioBufferLabel->setText(QString("Buffer Size: %1 ms").arg(val));
-    });
+#ifndef HAVE_QT_MULTIMEDIA
+    audioInputDeviceCombo->setEnabled(false);
+    audioOutputDeviceCombo->setEnabled(false);
+    audioQualityCombo->setEnabled(false);
+    enableAudioRelayButton->setEnabled(false);
+    enableAudioRelayButton->setToolTip("Qt6 Multimedia module is missing. Audio relay is disabled.");
+#endif
 
     resetAudioButton = new QPushButton("Reset Audio Subsystem", this);
 
@@ -311,8 +335,6 @@ QWidget* MainWindow::createAudioTab() {
     formLayout->addRow("Input Device:", audioInputDeviceCombo);
     formLayout->addRow("Output Device:", audioOutputDeviceCombo);
     formLayout->addRow("Preset Quality:", audioQualityCombo);
-    formLayout->addRow("Sample Rate:", audioSampleRateCombo);
-    formLayout->addRow(audioBufferLabel, audioBufferSlider);
     formLayout->addRow("Subsystem Recovery:", resetAudioButton);
 
     layout->addWidget(audioGroup);
@@ -330,19 +352,18 @@ QWidget* MainWindow::createAudioTab() {
                 return;
             }
 
-            int sampleRate = 48000;
-            QString rateStr = audioSampleRateCombo->currentText();
-            if (rateStr.contains("44100")) sampleRate = 44100;
-            else if (rateStr.contains("48000")) sampleRate = 48000;
-            else if (rateStr.contains("96000")) sampleRate = 96000;
+            const int bitrateTable[] = {64000, 128000, 256000};
+            int bitrate = bitrateTable[std::clamp(audioQualityCombo->currentIndex(), 0, 2)];
 
+#ifdef HAVE_QT_MULTIMEDIA
             QAudioDevice inputDevice = audioRelayManager->findInputDevice(audioInputDeviceCombo->currentText());
             QAudioDevice outputDevice = audioRelayManager->findOutputDevice(audioOutputDeviceCombo->currentText());
 
-            logWindow->appendLog("INFO", QString("Starting Audio Relay: Streaming to %1:48100, Receiving on port 48100...").arg(ipStr));
-            
-            audioRelayManager->startStreaming(inputDevice, targetIp, 48100, sampleRate, 2);
+            logWindow->appendLog("INFO", QString("Starting Opus Audio Relay: Streaming to %1:48100, Receiving on port 48100...").arg(ipStr));
+
+            audioRelayManager->startStreaming(inputDevice, targetIp, 48100, 48000, 2, bitrate);
             audioRelayManager->startReceiving(outputDevice, 48100);
+#endif
         } else {
             logWindow->appendLog("INFO", "Stopping Audio Relay.");
             audioRelayManager->stopAll();
@@ -405,37 +426,12 @@ void MainWindow::handleConnect() {
         return;
     }
 
-    logWindow->appendLog("INFO", QString("Connecting to %1:%2 via libusbip...").arg(ip).arg(port));
-    connectButton->setEnabled(false);
-    connectButton->setText("Connecting...");
-
-    QThread *thread = QThread::create([this, ip, port]() {
-        usbip::Socket sock = usbip::connect(
-            ip.toStdString().c_str(),
-            QString::number(port).toStdString().c_str()
-        );
-
-        QMetaObject::invokeMethod(this, [this, sock = std::move(sock), ip, port]() mutable {
-            connectButton->setEnabled(true);
-            if (!sock) {
-                DWORD err = GetLastError();
-                logWindow->appendLog("ERROR", QString("usbip::connect failed (error %1). Host unreachable.").arg(err));
-                connectionStatusLabel->setText("Status: Disconnected");
-                connectionStatusLabel->setStyleSheet("color: #ff3366; font-weight: bold;");
-                connectButton->setText("Connect");
-            } else {
-                isLogicallyConnected = true;
-                connectButton->setText("Disconnect");
-                connectionStatusLabel->setText("<font color='green'>Status: Connected (Logical)</font>");
-                connectionStatusLabel->setStyleSheet("font-weight: bold;");
-                logWindow->appendLog("INFO", QString("Connected to %1:%2.").arg(ip).arg(port));
-                saveSettings();
-            }
-        });
-    });
-
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
-    thread->start();
+    isLogicallyConnected = true;
+    connectButton->setText("Disconnect");
+    connectionStatusLabel->setText("<font color='green'>Status: Connected (Logical)</font>");
+    connectionStatusLabel->setStyleSheet("font-weight: bold;");
+    logWindow->appendLog("INFO", QString("Connected to %1:%2 in UI-only mode.").arg(ip).arg(port));
+    saveSettings();
 }
 
 void MainWindow::handleScanHost() {
@@ -451,60 +447,67 @@ void MainWindow::handleScanHost() {
         return;
     }
 
-    logWindow->appendLog("INFO", "Scanning exportable devices via libusbip...");
+    logWindow->appendLog("INFO", "Scanning exportable devices via usbip_sdk...");
 
-    usbip::Socket sock = usbip::connect(
-        ip.toStdString().c_str(),
-        portLineEdit->text().trimmed().toStdString().c_str()
-    );
-
+    usbip::Socket sock = usbip::connect(ip.toStdString().c_str(), QString::number(port).toStdString().c_str());
     if (!sock) {
-        DWORD err = GetLastError();
-        logWindow->appendLog("ERROR", QString("Scan connect failed (error %1).").arg(err));
+        logWindow->appendLog("ERROR", QString("Scan connect to %1:%2 failed (error %3).").arg(ip).arg(port).arg(GetLastError()));
         return;
     }
 
     QList<usbip::usb_device> devices;
-
-    bool enumOk = usbip::enum_exportable_devices(
-        sock.get(),
-        [&devices](int, const usbip::usb_device &dev) {
-            devices.append(dev);
-        },
-        [](int, const usbip::usb_device &, int, const usbip::usb_interface &) {},
-        nullptr
-    );
-
-    if (!enumOk) {
-        DWORD err = GetLastError();
-        logWindow->appendLog("ERROR", QString("enum_exportable_devices failed (error %1).").arg(err));
+    bool enumOk = false;
+    try {
+        enumOk = usbip::enum_exportable_devices(
+            sock.get(),
+            [&devices](int, const usbip::usb_device &dev) { devices.append(dev); },
+            [](int, const usbip::usb_device &, int, const usbip::usb_interface &) {},
+            nullptr);
+    } catch (const std::exception &ex) {
+        logWindow->appendLog("ERROR", QString("enum_exportable_devices threw an exception: %1").arg(ex.what()));
         return;
     }
 
-    if (devices.isEmpty()) {
-        QMessageBox::information(this, "Scan Result", "No exportable USB devices found on the remote host.");
-        logWindow->appendLog("INFO", "Scan complete: no devices found.");
+    if (!enumOk) {
+        logWindow->appendLog("ERROR", QString("enum_exportable_devices failed (error %1).").arg(GetLastError()));
         return;
     }
 
     usbDeviceTable->setRowCount(0);
 
+    if (devices.isEmpty()) {
+        logWindow->appendLog("INFO", "Scan complete: no exportable devices found.");
+        return;
+    }
+
     for (const usbip::usb_device &dev : devices) {
-        QString busid   = QString::fromStdString(dev.busid);
-        QString vidPid  = QString("%1:%2")
+        QString busid  = QString::fromStdString(dev.busid);
+        QString vidPid = QString("%1:%2")
                             .arg(dev.idVendor,  4, 16, QChar('0'))
                             .arg(dev.idProduct, 4, 16, QChar('0'))
                             .toUpper();
-        QString name    = getFriendlyDeviceName(dev.idVendor, dev.idProduct);
-        int attachedPort = findAttachedPort(busid);
-        bool attached   = (attachedPort >= 1);
-        QString status  = attached ? "Attached (Native)" : "Available";
+        QString name   = getFriendlyDeviceName(dev.idVendor, dev.idProduct);
+        int hubPort    = findAttachedPort(busid);
+        bool attached  = hubPort >= 1;
+        QString status = attached ? "Attached" : "Available";
 
         addUsbDeviceToTable(name, busid, vidPid, status, attached);
         logWindow->appendLog("INFO", QString("Found: %1  [%2]  %3").arg(busid, vidPid, name));
     }
 
     logWindow->appendLog("INFO", QString("Scan complete: %1 device(s) found.").arg(devices.size()));
+
+    for (int r = 0; r < usbDeviceTable->rowCount(); ++r) {
+        QTableWidgetItem *vidPidItem = usbDeviceTable->item(r, 2);
+        if (!vidPidItem) continue;
+        QString vidPid = vidPidItem->text();
+        if (!getFavorites().contains(vidPid)) continue;
+        QPushButton *attachBtn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(r, 4));
+        if (attachBtn && attachBtn->text() == "Attach") {
+            logWindow->appendLog("INFO", QString("Auto-attaching favorite device: %1").arg(vidPid));
+            handleToggleDeviceAttach(r);
+        }
+    }
 }
 
 void MainWindow::handleToggleLogWindow() {
@@ -519,20 +522,16 @@ void MainWindow::handleToggleLogWindow() {
 void MainWindow::handleToggleDeviceAttach(int row) {
     if (row < 0 || row >= usbDeviceTable->rowCount()) return;
 
-    QString busid = usbDeviceTable->item(row, 0)->data(Qt::UserRole).toString();
-    QPushButton *btn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 3));
+    QString busid = usbDeviceTable->item(row, 1)->data(Qt::UserRole).toString();
+    QPushButton *btn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 4));
     if (!btn) return;
 
     btn->setEnabled(false);
-
-    QString ip   = hostIpLineEdit->text().trimmed();
-    QString port = portLineEdit->text().trimmed();
 
     try {
         if (btn->text() == "Detach") {
             int hubPort = findAttachedPort(busid);
             if (hubPort < 1) {
-                QMessageBox::warning(this, "Detach Failed", QString("Device %1 is not recorded as attached.").arg(busid));
                 logWindow->appendLog("WARNING", QString("Device %1 is not recorded as attached; skipping detach.").arg(busid));
                 btn->setEnabled(true);
                 return;
@@ -540,77 +539,71 @@ void MainWindow::handleToggleDeviceAttach(int row) {
 
             usbip::Handle dev = usbip::vhci::open();
             if (!dev) {
-                QMessageBox::critical(this, "Driver Error", "Failed to open VHCI driver. Is the UDE driver loaded?");
-                logWindow->appendLog("ERROR", "vhci::open() failed — is the UDE driver loaded?");
+                logWindow->appendLog("ERROR", QString("vhci::open() failed (error %1).").arg(GetLastError()));
                 btn->setEnabled(true);
                 return;
             }
 
-            logWindow->appendLog("INFO", QString("Detaching bus %1 (port %2)...").arg(busid).arg(hubPort));
-
             if (!usbip::vhci::detach(dev.get(), hubPort)) {
                 DWORD err = GetLastError();
-                QMessageBox::warning(this, "Detach Failed", QString("Failed to detach device on bus %1. Error code: %2").arg(busid).arg(err));
-                logWindow->appendLog("ERROR", QString("vhci::detach() failed (error %1).").arg(err));
+                if (err == ERROR_DEVICE_NOT_CONNECTED) {
+                    logWindow->appendLog("WARNING", QString("Device on bus %1 was already disconnected on the host/OS level (error 1167). Force-syncing local state.").arg(busid));
+                    attachedPorts.remove(busid);
+                    if (row < usbDeviceTable->rowCount()) {
+                        usbDeviceTable->item(row, 3)->setText("Available");
+                        QPushButton *attachBtn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 4));
+                        if (attachBtn) attachBtn->setText("Attach");
+                    }
+                } else {
+                    logWindow->appendLog("ERROR", QString("vhci::detach() failed for bus %1 (error %2).").arg(busid).arg(err));
+                }
                 btn->setEnabled(true);
                 return;
             }
 
             attachedPorts.remove(busid);
-            desiredAttachedDevices.remove(busid);
-            reconnectTracker.remove(busid);
-
             if (row < usbDeviceTable->rowCount()) {
-                usbDeviceTable->item(row, 2)->setText("Available");
+                usbDeviceTable->item(row, 3)->setText("Available");
                 btn->setText("Attach");
             }
-            logWindow->appendLog("INFO", QString("Detached device on bus %1.").arg(busid));
+            logWindow->appendLog("INFO", QString("Detached bus %1 (port %2).").arg(busid).arg(hubPort));
             btn->setEnabled(true);
             return;
         }
 
         // Attach path
+        QString ip   = hostIpLineEdit->text().trimmed();
+        QString port = portLineEdit->text().trimmed();
+
         usbip::Handle dev = usbip::vhci::open();
         if (!dev) {
-            QMessageBox::critical(this, "Driver Error", "Failed to open VHCI driver. Is the UDE driver loaded?");
-            logWindow->appendLog("ERROR", "vhci::open() failed — is the UDE driver loaded?");
+            logWindow->appendLog("ERROR", QString("vhci::open() failed (error %1).").arg(GetLastError()));
             btn->setEnabled(true);
             return;
         }
 
-        usbip::vhci::attach_args args;
-        args.location.hostname = ip.toStdString();
-        args.location.service  = port.toStdString();
-        args.location.busid    = busid.toStdString();
-        args.once              = true;
+        usbip::device_location location;
+        location.hostname = ip.toStdString();
+        location.service  = port.toStdString();
+        location.busid    = busid.toStdString();
 
-        logWindow->appendLog("INFO", QString("Attaching bus %1 from %2...").arg(busid, ip));
+        logWindow->appendLog("INFO", QString("Attaching bus %1 from %2:%3...").arg(busid, ip, port));
 
-        int hubPort = usbip::vhci::attach(dev.get(), args);
+        int hubPort = usbip::vhci::attach(dev.get(), location);
         if (hubPort < 1) {
-            DWORD err = GetLastError();
-            QMessageBox::warning(this, "Attach Failed", QString("Failed to attach device on bus %1. Error code: %2").arg(busid).arg(err));
-            logWindow->appendLog("ERROR", QString("vhci::attach() failed (error %1).").arg(err));
+            logWindow->appendLog("ERROR", QString("vhci::attach() failed for bus %1 (error %2).").arg(busid).arg(GetLastError()));
             btn->setEnabled(true);
             return;
         }
 
         attachedPorts[busid] = hubPort;
-        desiredAttachedDevices.insert(busid);
-        reconnectTracker.remove(busid);
-
         if (row < usbDeviceTable->rowCount()) {
-            usbDeviceTable->item(row, 2)->setText("Attached (Native)");
+            usbDeviceTable->item(row, 3)->setText("Attached");
             btn->setText("Detach");
         }
         logWindow->appendLog("INFO", QString("Attached bus %1 on hub port %2.").arg(busid).arg(hubPort));
-
     } catch (const std::exception &ex) {
-        QMessageBox::warning(this, "Error", QString("SDK exception in attach/detach: %1").arg(ex.what()));
         logWindow->appendLog("ERROR", QString("SDK exception in attach/detach: %1").arg(ex.what()));
-    } catch (...) {
-        QMessageBox::warning(this, "Error", "Unknown SDK exception in attach/detach.");
-        logWindow->appendLog("ERROR", "Unknown SDK exception in attach/detach.");
     }
 
     btn->setEnabled(true);
@@ -619,97 +612,60 @@ void MainWindow::handleToggleDeviceAttach(int row) {
 void MainWindow::handleResetDeviceConnection(int row) {
     if (row < 0 || row >= usbDeviceTable->rowCount()) return;
 
-    QString busid = usbDeviceTable->item(row, 0)->data(Qt::UserRole).toString();
-    QString ip    = hostIpLineEdit->text().trimmed();
-    QString port  = portLineEdit->text().trimmed();
+    QString busid = usbDeviceTable->item(row, 1)->data(Qt::UserRole).toString();
 
-    QPushButton *attachBtn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 3));
-    QPushButton *resetBtn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 4));
-    if (attachBtn) attachBtn->setEnabled(false);
-    if (resetBtn) resetBtn->setEnabled(false);
-
-    logWindow->appendLog("INFO", QString("Resetting connection for bus %1 — detaching...").arg(busid));
-
-    try {
-        int hubPort = findAttachedPort(busid);
-        if (hubPort < 1) {
-            QMessageBox::warning(this, "Reset Failed", QString("Bus %1 not found in attached ports; skipping detach.").arg(busid));
-            logWindow->appendLog("WARNING", QString("Bus %1 not found in attached ports; skipping detach.").arg(busid));
-        } else {
-            usbip::Handle dev = usbip::vhci::open();
-            if (!dev) {
-                QMessageBox::critical(this, "Driver Error", "Failed to open VHCI driver during reset.");
-                logWindow->appendLog("ERROR", "vhci::open() failed during reset.");
-                if (attachBtn) attachBtn->setEnabled(true);
-                if (resetBtn) resetBtn->setEnabled(true);
-                return;
-            }
-            if (!usbip::vhci::detach(dev.get(), hubPort)) {
-                DWORD err = GetLastError();
-                QMessageBox::warning(this, "Reset Failed", QString("Failed to detach device during reset. Error code: %1").arg(err));
-                logWindow->appendLog("ERROR", QString("vhci::detach() failed during reset (error %1).").arg(err));
-                if (attachBtn) attachBtn->setEnabled(true);
-                if (resetBtn) resetBtn->setEnabled(true);
-                return;
-            }
-            attachedPorts.remove(busid);
-            if (row < usbDeviceTable->rowCount()) {
-                usbDeviceTable->item(row, 2)->setText("Available");
-                if (attachBtn) attachBtn->setText("Attach");
-            }
-            logWindow->appendLog("INFO", QString("Detached bus %1 for reset.").arg(busid));
-        }
-    } catch (const std::exception &ex) {
-        QMessageBox::warning(this, "Error", QString("SDK exception during reset detach: %1").arg(ex.what()));
-        logWindow->appendLog("ERROR", QString("SDK exception during reset detach: %1").arg(ex.what()));
-        if (attachBtn) attachBtn->setEnabled(true);
-        if (resetBtn) resetBtn->setEnabled(true);
+    int hubPort = findAttachedPort(busid);
+    if (hubPort < 1) {
+        logWindow->appendLog("WARNING", QString("Device on bus %1 is not attached; cannot reset.").arg(busid));
         return;
     }
 
-    // Re-attach after 2 seconds
-    QTimer::singleShot(2000, this, [this, ip, port, busid, row, attachBtn, resetBtn]() {
-        logWindow->appendLog("INFO", QString("Re-attaching bus %1 to %2...").arg(busid, ip));
-        try {
-            usbip::Handle dev = usbip::vhci::open();
-            if (!dev) {
-                QMessageBox::critical(this, "Driver Error", "Failed to open VHCI driver during reset re-attach.");
-                logWindow->appendLog("ERROR", "vhci::open() failed during reset re-attach.");
-                if (attachBtn) attachBtn->setEnabled(true);
-                if (resetBtn) resetBtn->setEnabled(true);
-                return;
-            }
+    usbip::Handle dev = usbip::vhci::open();
+    if (!dev) {
+        logWindow->appendLog("ERROR", QString("vhci::open() failed (error %1).").arg(GetLastError()));
+        return;
+    }
 
-            usbip::vhci::attach_args args;
-            args.location.hostname = ip.toStdString();
-            args.location.service  = port.toStdString();
-            args.location.busid    = busid.toStdString();
-            args.once              = true;
-
-            int hubPort = usbip::vhci::attach(dev.get(), args);
-            if (hubPort < 1) {
-                DWORD err = GetLastError();
-                QMessageBox::warning(this, "Reconnection Failed", QString("Failed to reconnect device. Error code: %1").arg(err));
-                logWindow->appendLog("ERROR", QString("vhci::attach() failed during reset (error %1).").arg(err));
-                if (attachBtn) attachBtn->setEnabled(true);
-                if (resetBtn) resetBtn->setEnabled(true);
-                return;
-            }
-
-            attachedPorts[busid] = hubPort;
+    if (!usbip::vhci::detach(dev.get(), hubPort)) {
+        DWORD err = GetLastError();
+        if (err == ERROR_DEVICE_NOT_CONNECTED) {
+            logWindow->appendLog("WARNING", QString("Device on bus %1 was already disconnected on the host/OS level (error 1167). Force-syncing local state.").arg(busid));
+            attachedPorts.remove(busid);
             if (row < usbDeviceTable->rowCount()) {
-                usbDeviceTable->item(row, 2)->setText("Attached (Native)");
-                if (attachBtn) attachBtn->setText("Detach");
+                usbDeviceTable->item(row, 3)->setText("Available");
+                QPushButton *attachBtn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 4));
+                if (attachBtn) attachBtn->setText("Attach");
             }
-            logWindow->appendLog("INFO", QString("Re-attached bus %1 on hub port %2.").arg(busid).arg(hubPort));
-        } catch (const std::exception &ex) {
-            QMessageBox::warning(this, "Error", QString("SDK exception during reset re-attach: %1").arg(ex.what()));
-            logWindow->appendLog("ERROR", QString("SDK exception during reset re-attach: %1").arg(ex.what()));
+            // stale port cleared; fall through to re-attach
+        } else {
+            logWindow->appendLog("ERROR", QString("vhci::detach() failed for bus %1 (error %2).").arg(busid).arg(err));
+            return;
         }
+    } else {
+        attachedPorts.remove(busid);
+    }
+    logWindow->appendLog("INFO", QString("Resetting device on bus %1 (detaching and re-attaching)...").arg(busid));
 
-        if (attachBtn) attachBtn->setEnabled(true);
-        if (resetBtn) resetBtn->setEnabled(true);
-    });
+    QString ip   = hostIpLineEdit->text().trimmed();
+    QString port = portLineEdit->text().trimmed();
+
+    usbip::device_location location;
+    location.hostname = ip.toStdString();
+    location.service  = port.toStdString();
+    location.busid    = busid.toStdString();
+
+    int newHubPort = usbip::vhci::attach(dev.get(), location);
+    if (newHubPort < 1) {
+        logWindow->appendLog("ERROR", QString("Re-attach failed for bus %1 (error %2).").arg(busid).arg(GetLastError()));
+        if (row < usbDeviceTable->rowCount())
+            usbDeviceTable->item(row, 3)->setText("Available");
+        return;
+    }
+
+    attachedPorts[busid] = newHubPort;
+    if (row < usbDeviceTable->rowCount())
+        usbDeviceTable->item(row, 3)->setText("Attached");
+    logWindow->appendLog("INFO", QString("Reset complete: bus %1 re-attached on hub port %2.").arg(busid).arg(newHubPort));
 }
 
 void MainWindow::handleResetAudioSubsystem() {
@@ -767,6 +723,8 @@ void MainWindow::applyTheme(const QString &themeName) {
             "QTableWidget { background-color: #0d0e15; gridline-color: #23273a; color: #ffffff; }"
             "QHeaderView::section { background-color: #12141d; color: #00f2fe; border: 1px solid #23273a; padding: 4px; }"
             "QLabel, QCheckBox { color: #e0e6ed; }"
+            "QLabel#highBandwidthWarningLabel { color: #ffaa00; font-size: 11px; padding: 6px; background-color: #1a1d2e; border-top: 1px solid #23273a; }"
+            "QLabel#deviceDisconnectWarningLabel { color: #ffaa00; font-size: 11px; padding: 2px 6px 6px 6px; background-color: #1a1d2e; }"
         );
     } else if (themeName == "Light") {
         setStyleSheet(
@@ -783,6 +741,8 @@ void MainWindow::applyTheme(const QString &themeName) {
             "QTableWidget { background-color: #ffffff; gridline-color: #cbd5e1; color: #0f172a; }"
             "QHeaderView::section { background-color: #f8fafc; color: #2563eb; border: 1px solid #cbd5e1; padding: 4px; }"
             "QLabel, QCheckBox { color: #0f172a; }"
+            "QLabel#highBandwidthWarningLabel { color: #b45309; font-size: 11px; padding: 6px; background-color: #ffffff; border-top: 1px solid #cbd5e1; }"
+            "QLabel#deviceDisconnectWarningLabel { color: #b45309; font-size: 11px; padding: 2px 6px 6px 6px; background-color: #ffffff; }"
         );
     } else if (themeName == "High Contrast") {
         setStyleSheet(
@@ -799,6 +759,8 @@ void MainWindow::applyTheme(const QString &themeName) {
             "QTableWidget { background-color: #000000; gridline-color: #ffffff; color: #ffffff; }"
             "QHeaderView::section { background-color: #000000; color: #ffff00; border: 2px solid #ffffff; padding: 4px; }"
             "QLabel, QCheckBox { color: #ffffff; }"
+            "QLabel#highBandwidthWarningLabel { color: #ffff00; font-size: 11px; padding: 6px; background-color: #000000; border-top: 2px solid #ffffff; }"
+            "QLabel#deviceDisconnectWarningLabel { color: #ffff00; font-size: 11px; padding: 2px 6px 6px 6px; background-color: #000000; }"
         );
     }
 }
@@ -807,182 +769,43 @@ int MainWindow::findAttachedPort(const QString &busid) const {
     return attachedPorts.value(busid, -1);
 }
 
-QString MainWindow::getDriverPath() {
+QStringList MainWindow::getFavorites() const {
     QSettings settings("USBIPClient", "USBIPClient");
-    QString defaultPath = QCoreApplication::applicationDirPath() + "/Drivers";
-    SYSTEM_INFO sysInfo;
-    GetNativeSystemInfo(&sysInfo);
-    if (sysInfo.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64) {
-        defaultPath = QCoreApplication::applicationDirPath() + "/Drivers/ARM64";
-    }
-    QString configuredPath = settings.value("paths/drivers", defaultPath).toString();
-
-    QFileInfo checkExe(configuredPath + "/usbip.exe");
-    if (!checkExe.exists()) {
-        configuredPath = defaultPath;
-        checkExe.setFile(configuredPath + "/usbip.exe");
-    }
-
-    if (!checkExe.exists()) {
-        logWindow->appendLog("WARNING", "usbip.exe not found in configured path. Prompting user for directory...");
-        QString selectedDir = QFileDialog::getExistingDirectory(this, "Select usbip-win2 Drivers & Binaries Directory", defaultPath);
-        if (!selectedDir.isEmpty()) {
-            settings.setValue("paths/drivers", selectedDir);
-            return selectedDir;
-        }
-    } else {
-        settings.setValue("paths/drivers", configuredPath);
-    }
-    return configuredPath;
+    return settings.value("favorites").toStringList();
 }
 
-bool MainWindow::checkAndConfigureDrivers() {
-    QSettings udeService("HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\usbip2_ude", QSettings::NativeFormat);
-    QSettings filterService("HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\usbip2_filter", QSettings::NativeFormat);
-
-    bool driversInstalled = udeService.contains("ImagePath") && filterService.contains("ImagePath");
-    QString driverDir = getDriverPath();
-
-    if (!driversInstalled) {
-        logWindow->appendLog("INFO", "USB/IP kernel driver services not detected in registry. Installing...");
-        QString udeInf    = QDir::toNativeSeparators(driverDir + "/usbip2_ude.inf");
-        QString filterInf = QDir::toNativeSeparators(driverDir + "/usbip2_filter.inf");
-
-        QProcess::execute("InfDefaultInstall.exe", QStringList() << udeInf);
-        QProcess::execute("InfDefaultInstall.exe", QStringList() << filterInf);
-        logWindow->appendLog("INFO", "Driver installation sequence executed.");
-    } else {
-        logWindow->appendLog("INFO", "USB/IP kernel drivers are already registered in the system.");
-    }
-
-    // Ensure the ROOT\USBIP_WIN2\UDE virtual host controller node exists
-    QString usbipPath = QDir::toNativeSeparators(driverDir + "/usbip.exe");
-    QProcess *installProc = new QProcess(this);
-    installProc->setWorkingDirectory(driverDir);
-
-    connect(installProc, &QProcess::readyReadStandardOutput, this, [this, installProc]() {
-        QString out = QString::fromUtf8(installProc->readAllStandardOutput()).trimmed();
-        if (!out.isEmpty())
-            logWindow->appendLog("USBIP-CORE", out);
-    });
-    connect(installProc, &QProcess::readyReadStandardError, this, [this, installProc]() {
-        QString err = QString::fromUtf8(installProc->readAllStandardError()).trimmed();
-        if (!err.isEmpty())
-            logWindow->appendLog("USBIP-CORE", err);
-    });
-    connect(installProc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
-            [this, installProc](int exitCode, QProcess::ExitStatus) {
-        if (exitCode == 0)
-            logWindow->appendLog("INFO", "usbip vhci install: ROOT\\\\USBIP_WIN2\\\\UDE node verified/created.");
-        else
-            logWindow->appendLog("WARNING", QString("usbip vhci install exited with code %1.").arg(exitCode));
-        installProc->deleteLater();
-    });
-
-    logWindow->appendLog("INFO", "Running 'usbip vhci install' to verify virtual host controller node...");
-    installProc->start(usbipPath, QStringList() << "vhci" << "install");
-
-    return true;
+void MainWindow::setFavorite(const QString &vidPid, bool favorite) {
+    QSettings settings("USBIPClient", "USBIPClient");
+    QStringList favs = settings.value("favorites").toStringList();
+    if (favorite && !favs.contains(vidPid)) { favs.append(vidPid); }
+    else if (!favorite) { favs.removeAll(vidPid); }
+    settings.setValue("favorites", favs);
+    logWindow->appendLog("INFO", QString("Device %1 %2 favorites.").arg(vidPid, favorite ? "added to" : "removed from"));
 }
 
 QString MainWindow::getFriendlyDeviceName(quint16 vendorId, quint16 productId) {
-    QString key = QString("%1:%2")
-                    .arg(vendorId, 4, 16, QChar('0'))
-                    .arg(productId, 4, 16, QChar('0'))
-                    .toUpper();
-
-    if (usbDeviceDb.contains(key)) {
-        return usbDeviceDb.value(key);
+    if (usbIdsDb) {
+        auto [vendorStr, productStr] = usbIdsDb->find_product(vendorId, productId);
+        if (!vendorStr.empty() || !productStr.empty()) {
+            QString mfg = vendorStr.empty() ? "Unknown Vendor" : QString::fromUtf8(vendorStr.data(), vendorStr.size());
+            QString prod = productStr.empty() ? "Unknown Product" : QString::fromUtf8(productStr.data(), productStr.size());
+            QString vidPid = QString("%1:%2").arg(vendorId, 4, 16, QChar('0')).arg(productId, 4, 16, QChar('0')).toUpper();
+            return QString("%1 - %2 (%3)").arg(mfg, prod, vidPid);
+        }
     }
-    return QString("Unknown Device [%1]").arg(key);
+    return "Unknown Device";
 }
 
 void MainWindow::loadUsbIdDatabase() {
     QString dbPath = QCoreApplication::applicationDirPath() + "/usb.ids";
     QFile file(dbPath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    if (!file.open(QIODevice::ReadOnly)) {
         logWindow->appendLog("WARNING", "Failed to open usb.ids database at " + dbPath);
         return;
     }
 
-    QTextStream in(&file);
-    QString currentVid;
-    int count = 0;
-
-    while (!in.atEnd()) {
-        QString line = in.readLine();
-        if (line.isEmpty() || line.startsWith('#') || line.startsWith("C ") || line.startsWith("\t\t")) continue;
-        if (line.startsWith('\t')) {
-            QString pid = line.mid(1, 4).toUpper();
-            QString name = line.mid(6).trimmed();
-            usbDeviceDb[currentVid + ":" + pid] = name;
-            count++;
-        } else {
-            currentVid = line.left(4).toUpper();
-        }
-    }
-
-    usbDeviceDb["05C6:F000"] = "Qualcomm HS-USB (Essential PH-1)";
-    logWindow->appendLog("INFO", QString("Loaded %1 USB devices from database.").arg(count));
+    usbIdsData = file.readAll();
+    usbIdsDb = new usbip::UsbIds(std::string_view(usbIdsData.constData(), usbIdsData.size()));
+    logWindow->appendLog("INFO", "Loaded usb.ids database via SDK.");
 }
 
-void MainWindow::syncDeviceState() {
-    try {
-        usbip::Handle dev = usbip::vhci::open();
-        if (!dev) {
-            return;
-        }
-
-        auto importedOpt = usbip::vhci::get_imported_devices(dev.get());
-        if (!importedOpt) {
-            return;
-        }
-
-        const auto &imported = *importedOpt;
-
-        attachedPorts.clear();
-        for (const auto &device : imported) {
-            QString busid = QString::fromStdString(device.location.busid);
-            attachedPorts[busid] = device.port;
-        }
-
-        for (int row = 0; row < usbDeviceTable->rowCount(); ++row) {
-            QString busid = usbDeviceTable->item(row, 0)->data(Qt::UserRole).toString();
-            bool found = attachedPorts.contains(busid);
-
-            QPushButton *btn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 3));
-            if (btn && !btn->isEnabled()) {
-                continue; // Skip updating if an operation is in progress
-            }
-
-            if (found) {
-                usbDeviceTable->setItem(row, 2, new QTableWidgetItem("Attached (Native)"));
-                usbDeviceTable->item(row, 2)->setForeground(QBrush(QColor("#00ffcc")));
-                if (btn) btn->setText("Detach");
-            } else {
-                usbDeviceTable->setItem(row, 2, new QTableWidgetItem("Available"));
-                if (btn) btn->setText("Attach");
-
-                // Auto-reconnect logic
-                if (desiredAttachedDevices.contains(busid)) {
-                    ReconnectInfo &info = reconnectTracker[busid];
-                    QDateTime now = QDateTime::currentDateTime();
-                    if (info.attempts < 3 && (!info.lastAttempt.isValid() || info.lastAttempt.secsTo(now) >= 10)) {
-                        info.attempts++;
-                        info.lastAttempt = now;
-                        logWindow->appendLog("WARNING", QString("Device on bus %1 disconnected unexpectedly. Auto-reconnect attempt %2/3...").arg(busid).arg(info.attempts));
-                        
-                        QTimer::singleShot(0, this, [this, row]() {
-                            handleToggleDeviceAttach(row);
-                        });
-                    } else if (info.attempts >= 3) {
-                        logWindow->appendLog("ERROR", QString("Auto-reconnect failed for device on bus %1 after 3 attempts. Giving up.").arg(busid));
-                        desiredAttachedDevices.remove(busid);
-                        reconnectTracker.remove(busid);
-                    }
-                }
-            }
-        }
-    } catch (...) {
-    }
-}

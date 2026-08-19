@@ -22,16 +22,9 @@
 #include <QProcess>
 #include <QSystemTrayIcon>
 #include <QMenu>
-#include <QSet>
-#include <QDateTime>
 #include "logwindow.h"
 
-// libusbip SDK — must come after windows.h is pulled in transitively
-#define WIN32_LEAN_AND_MEAN
-#include <usbip/vhci.h>
-#include <usbip/remote.h>
-#include <usbip/output.h>
-#include <usbip/persistent.h>
+namespace usbip { class UsbIds; }
 
 class AudioRelayManager;
 
@@ -53,7 +46,6 @@ private slots:
     void handleToggleDeviceAttach(int row);
     void handleResetAudioSubsystem();
     void handleThemeChange(int index);
-    void syncDeviceState();
     void handleNewProfile();
     void handleProfileChange(const QString &profileName);
 
@@ -69,12 +61,12 @@ private:
     void saveSettings();
     void loadProfileSettings(const QString &profileName);
     void saveProfileSettings(const QString &profileName);
-    bool checkAndConfigureDrivers();
-    QString getDriverPath();
     QString getFriendlyDeviceName(quint16 vendorId, quint16 productId);
     void loadUsbIdDatabase();
-    // Returns the vhci port# for a given busid, or -1 if not attached
+    // Returns the vhci hub port# for a given busid, or -1 if not attached
     int findAttachedPort(const QString &busid) const;
+    QStringList getFavorites() const;
+    void setFavorite(const QString &vidPid, bool favorite);
 
     QTabWidget *tabWidget;
     QLineEdit *hostIpLineEdit;
@@ -84,15 +76,14 @@ private:
     QPushButton *loggerButton;
     QTableWidget *usbDeviceTable;
     QLabel *connectionStatusLabel;
+    QLabel *highBandwidthWarningLabel;
+    QLabel *deviceDisconnectWarningLabel;
 
     // Audio Tab Controls
     QPushButton *enableAudioRelayButton;
     QComboBox *audioInputDeviceCombo;
     QComboBox *audioOutputDeviceCombo;
     QComboBox *audioQualityCombo;
-    QComboBox *audioSampleRateCombo;
-    QSlider *audioBufferSlider;
-    QLabel *audioBufferLabel;
     QPushButton *resetAudioButton;
 
     // Settings Tab Controls
@@ -103,17 +94,12 @@ private:
 
     LogWindow *logWindow;
     bool isLogicallyConnected = false;
-    // Maps busid -> vhci hub port number (>= 1) for currently attached devices
-    struct ReconnectInfo {
-        int attempts = 0;
-        QDateTime lastAttempt;
-    };
+    
+    QByteArray usbIdsData;
+    usbip::UsbIds *usbIdsDb = nullptr;
 
+    // Maps busid -> vhci hub port number (>= 1) for currently attached devices
     QHash<QString, int> attachedPorts;
-    QHash<QString, QString> usbDeviceDb;
-    QSet<QString> desiredAttachedDevices;
-    QHash<QString, ReconnectInfo> reconnectTracker;
-    QTimer *syncTimer;
     QSystemTrayIcon *trayIcon;
     bool isExiting = false;
     QString currentProfile;

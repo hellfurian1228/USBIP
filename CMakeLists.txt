@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(USBIPClient VERSION 1.0.0 LANGUAGES CXX)
+project(USBIPClient VERSION 1.0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,48 +8,89 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
 # BRUTE FORCE THE PATH - No conditions, no exceptions
-set(CMAKE_PREFIX_PATH "C:/Qt/6.11.1/msvc2022_64" CACHE PATH "Force Qt6 Path" FORCE)
+set(CMAKE_PREFIX_PATH "C:/Qt/6.12.0/msvc2022_64" CACHE PATH "Force Qt6 Path" FORCE)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Multimedia)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
+find_package(Qt6 OPTIONAL_COMPONENTS Multimedia)
 
-set(USBIP_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBip")
+# --- Opus codec (fetched from source) ---
+include(FetchContent)
 
-# Build libusbip from source to ensure ABI compatibility (Debug/Release)
-add_library(libusbip SHARED
-    ProjectFiles/usbip-win2-SOURCE/userspace/libusbip/src/device_speed.cpp
-    ProjectFiles/usbip-win2-SOURCE/userspace/libusbip/src/dllmain.cpp
-    ProjectFiles/usbip-win2-SOURCE/userspace/libusbip/src/file_ver.cpp
-    ProjectFiles/usbip-win2-SOURCE/userspace/libusbip/src/format_message.cpp
-    ProjectFiles/usbip-win2-SOURCE/userspace/libusbip/src/output.cpp
-    ProjectFiles/usbip-win2-SOURCE/userspace/libusbip/src/persistent.cpp
-    ProjectFiles/usbip-win2-SOURCE/userspace/libusbip/src/proto_op.cpp
-    ProjectFiles/usbip-win2-SOURCE/userspace/libusbip/src/remote.cpp
-    ProjectFiles/usbip-win2-SOURCE/userspace/libusbip/src/strconv.cpp
-    ProjectFiles/usbip-win2-SOURCE/userspace/libusbip/src/usb_ids.cpp
-    ProjectFiles/usbip-win2-SOURCE/userspace/libusbip/src/vhci.cpp
-    ProjectFiles/usbip-win2-SOURCE/userspace/libusbip/src/win_socket.cpp
+# Opus v1.4 declares cmake_minimum_required(3.1); CMake >= 3.27 rejects < 3.5.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+
+# Suppress CMP0048 (project() VERSION handling) triggered by old sub-projects.
+if(POLICY CMP0048)
+    cmake_policy(SET CMP0048 NEW)
+endif()
+
+FetchContent_Declare(
+    opus
+    GIT_REPOSITORY https://github.com/xiph/opus.git
+    GIT_TAG        v1.4
+    GIT_SHALLOW    TRUE
+)
+set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_TESTING        OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_PROGRAMS       OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(opus)
+
+# --- usbip-win2 user-mode SDK (built from source to avoid ABI mismatches) ---
+set(USBIP_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src/usbip_sdk")
+file(GLOB USBIP_SDK_SOURCES CONFIGURE_DEPENDS
+    "${USBIP_SDK_ROOT}/libusbip/src/*.c"
+    "${USBIP_SDK_ROOT}/libusbip/src/*.cpp"
 )
 
-target_compile_definitions(libusbip PRIVATE
-    USBIP_EXPORTS
-    _WINDOWS
-    _USRDLL
-    WIN32_LEAN_AND_MEAN
-    NOMINMAX
+# Generate the message-table header referenced as <resources/messages.h>
+find_program(MC_EXECUTABLE mc REQUIRED)
+
+set(USBIP_SDK_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/usbip_sdk")
+
+add_custom_command(
+    OUTPUT "${USBIP_SDK_GENERATED_DIR}/resources/messages.h"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${USBIP_SDK_GENERATED_DIR}/resources"
+    COMMAND ${MC_EXECUTABLE} -h "${USBIP_SDK_GENERATED_DIR}/resources" -r "${USBIP_SDK_GENERATED_DIR}/resources"
+        "${USBIP_SDK_ROOT}/include/resources/messages.mc"
+    MAIN_DEPENDENCY "${USBIP_SDK_ROOT}/include/resources/messages.mc"
+    COMMENT "Generating messages.h from messages.mc"
+    VERBATIM
+)
+
+add_custom_target(usbip_sdk_messages DEPENDS "${USBIP_SDK_GENERATED_DIR}/resources/messages.h")
+
+add_library(usbip_sdk STATIC ${USBIP_SDK_SOURCES})
+add_dependencies(usbip_sdk usbip_sdk_messages)
+
+target_include_directories(usbip_sdk PUBLIC
+    "${USBIP_SDK_ROOT}/include"
+    "${USBIP_SDK_ROOT}/libusbip"
+    "${USBIP_SDK_GENERATED_DIR}"
+)
+
+# Private: libusbip/src contains an internal setupapi.h shim that would shadow
+# the real Windows SDK <setupapi.h> for consumers if exposed publicly.
+target_include_directories(usbip_sdk PRIVATE
+    "${USBIP_SDK_ROOT}/libusbip/src"
+)
+
+target_compile_definitions(usbip_sdk PUBLIC
     UNICODE
     _UNICODE
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
+    LIBUSBIP_STATIC
 )
 
-target_include_directories(libusbip PRIVATE
-    ProjectFiles/usbip-win2-SOURCE/include
-    ProjectFiles/usbip-win2-SOURCE/userspace/libusbip
-    ProjectFiles/usbip-win2-SOURCE/userspace
-)
+# dllspec.h defaults USBIP_API to dllimport unless USBIP_EXPORTS is defined; consumers
+# must see the same definition too, otherwise they emit dllimport thunks that don't
+# resolve against the dllexport symbols in this static library (LNK2019)
+target_compile_definitions(usbip_sdk PUBLIC USBIP_EXPORTS)
 
-target_link_libraries(libusbip PRIVATE
-    Version
+target_link_libraries(usbip_sdk PRIVATE
     ws2_32
-    CfgMgr32
+    setupapi
+    cfgmgr32
 )
 
 add_executable(USBIPClient
@@ -60,10 +101,11 @@ add_executable(USBIPClient
     logwindow.h
     audiorelaymanager.cpp
     audiorelaymanager.h
-)
-
-target_include_directories(USBIPClient PRIVATE
-    "${USBIP_SDK_DIR}/include"
+    driverinstaller.cpp
+    driverinstaller.h
+    src/audio/opus_transcoder.cpp
+    src/transport/udp_transport.cpp
+    src/audio/opus_transcoder.h
 )
 
 target_link_libraries(USBIPClient PRIVATE
@@ -71,48 +113,40 @@ target_link_libraries(USBIPClient PRIVATE
     Qt6::Gui
     Qt6::Widgets
     Qt6::Network
-    Qt6::Multimedia
-    libusbip
+    usbip_sdk
+    opus
+    setupapi
+    newdev
 )
+
+target_include_directories(USBIPClient PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+if(TARGET Qt6::Multimedia)
+    target_link_libraries(USBIPClient PRIVATE Qt6::Multimedia)
+    target_compile_definitions(USBIPClient PRIVATE HAVE_QT_MULTIMEDIA)
+endif()
 
 # Self-elevation is handled programmatically in main.cpp, so no UAC manifest is needed here.
 
 set_target_properties(USBIPClient PROPERTIES
-    WIN32_EXECUTABLE OFF
+    WIN32_EXECUTABLE ON
 )
 
 # Deploy Qt dependencies using windeployqt post-build
 add_custom_command(TARGET USBIPClient POST_BUILD
-    COMMAND "C:/Qt/6.11.1/msvc2022_64/bin/windeployqt.exe"
+    COMMAND "C:/Qt/6.12.0/msvc2022_64/bin/windeployqt.exe"
         --no-compiler-runtime
         --verbose 0
         "$<TARGET_FILE:USBIPClient>"
 )
 
-# Copy Drivers folder to build directory
+# Deploy the pre-signed kernel driver package next to the executable
 add_custom_command(TARGET USBIPClient POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/Drivers"
         "$<TARGET_FILE_DIR:USBIPClient>/Drivers"
-)
-
-# Copy libusbip.dll to Drivers folder in build directory
-add_custom_command(TARGET USBIPClient POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<TARGET_FILE:libusbip>"
-        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/$<TARGET_FILE_NAME:libusbip>"
-)
-
-# Copy resources.dll to build directory and Drivers folder
-add_custom_command(TARGET USBIPClient POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBip/resources.dll"
-        "$<TARGET_FILE_DIR:USBIPClient>/resources.dll"
-)
-add_custom_command(TARGET USBIPClient POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBip/resources.dll"
-        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/resources.dll"
 )
 
 # Copy usb.ids to build directory
@@ -122,89 +156,10 @@ add_custom_command(TARGET USBIPClient POST_BUILD
         "$<TARGET_FILE_DIR:USBIPClient>/usb.ids"
 )
 
-# Copy ARM64 binaries and drivers to Drivers/ARM64 folder in build directory
-add_custom_command(TARGET USBIPClient POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64"
-)
-add_custom_command(TARGET USBIPClient POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBipARM64/usbip.exe"
-        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/usbip.exe"
-)
-add_custom_command(TARGET USBIPClient POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBipARM64/devnode.exe"
-        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/devnode.exe"
-)
-add_custom_command(TARGET USBIPClient POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBipARM64/libusbip.dll"
-        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/libusbip.dll"
-)
-add_custom_command(TARGET USBIPClient POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBipARM64/resources.dll"
-        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/resources.dll"
-)
-add_custom_command(TARGET USBIPClient POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_filter.cat"
-        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/usbip2_filter.cat"
-)
-add_custom_command(TARGET USBIPClient POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_filter.inf"
-        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/usbip2_filter.inf"
-)
-add_custom_command(TARGET USBIPClient POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_filter.sys"
-        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/usbip2_filter.sys"
-)
-add_custom_command(TARGET USBIPClient POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_ude.cat"
-        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/usbip2_ude.cat"
-)
-add_custom_command(TARGET USBIPClient POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_ude.inf"
-        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/usbip2_ude.inf"
-)
-add_custom_command(TARGET USBIPClient POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_ude.sys"
-        "$<TARGET_FILE_DIR:USBIPClient>/Drivers/ARM64/usbip2_ude.sys"
-)
-
 # --- Installation and Packaging Configuration ---
 
-# Install Drivers directory first
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/" DESTINATION Drivers)
-
-# Install target executable and libusbip DLL to root
+# Install target executable
 install(TARGETS USBIPClient RUNTIME DESTINATION .)
-install(TARGETS libusbip RUNTIME DESTINATION .)
-
-# Also install libusbip DLL to Drivers directory so usbip.exe can find it
-install(FILES "$<TARGET_FILE:libusbip>" DESTINATION Drivers)
-
-# Install resources.dll to root and Drivers directory
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBip/resources.dll" DESTINATION .)
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBip/resources.dll" DESTINATION Drivers)
-
-# Install ARM64 binaries and drivers to Drivers/ARM64
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBipARM64/usbip.exe" DESTINATION Drivers/ARM64)
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBipARM64/devnode.exe" DESTINATION Drivers/ARM64)
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBipARM64/libusbip.dll" DESTINATION Drivers/ARM64)
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ProjectFiles/USBipARM64/resources.dll" DESTINATION Drivers/ARM64)
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_filter.cat" DESTINATION Drivers/ARM64)
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_filter.inf" DESTINATION Drivers/ARM64)
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_filter.sys" DESTINATION Drivers/ARM64)
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_ude.cat" DESTINATION Drivers/ARM64)
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_ude.inf" DESTINATION Drivers/ARM64)
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/usbip2_ude.sys" DESTINATION Drivers/ARM64)
 
 # Install usb.ids
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/usb.ids" DESTINATION .)
@@ -212,7 +167,7 @@ install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/usb.ids" DESTINATION .)
 # Deploy Qt dependencies using windeployqt
 install(CODE "
     execute_process(
-        COMMAND \"C:/Qt/6.11.1/msvc2022_64/bin/windeployqt.exe\"
+        COMMAND \"C:/Qt/6.12.0/msvc2022_64/bin/windeployqt.exe\"
                 --no-compiler-runtime
                 --verbose 0
                 \"\${CMAKE_INSTALL_PREFIX}/USBIPClient.exe\"
@@ -228,7 +183,7 @@ endif()
 # CPack Configuration
 set(CPACK_PACKAGE_NAME "USBIP Client")
 set(CPACK_PACKAGE_VENDOR "Tyler Long")
-set(CPACK_PACKAGE_VERSION "1.0.0-beta")
+set(CPACK_PACKAGE_VERSION "1.0.1")
 set(CPACK_GENERATOR "NSIS")
 
 # NSIS Specifics

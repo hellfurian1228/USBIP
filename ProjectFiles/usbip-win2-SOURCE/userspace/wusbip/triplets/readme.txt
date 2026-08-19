@@ -1,1 +1,0 @@
-See https://github.com/microsoft/vcpkg/tree/master/triplets/community

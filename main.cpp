@@ -3,6 +3,7 @@
 #include "mainwindow.h"
 #include <windows.h>
 #include <shellapi.h>
+#include <win_socket.h>
 
 static bool isRunningAsAdmin() {
     BOOL isAdmin = FALSE;
@@ -33,7 +34,7 @@ int main(int argc, char *argv[]) {
     }
 
     QApplication app(argc, argv);
-    usbip::InitWinSock2 ws2;
+    usbip::InitWinSock2 ws2; // required by usbip::connect() / enum_exportable_devices()
     MainWindow window;
     window.show();
     return app.exec();
