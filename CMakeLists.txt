@@ -16,8 +16,8 @@ find_package(Qt6 OPTIONAL_COMPONENTS Multimedia)
 # --- Opus codec (fetched from source) ---
 include(FetchContent)
 
-# Opus v1.4 declares cmake_minimum_required(3.1); CMake >= 3.27 rejects < 3.5.
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+# Opus v1.4 declares cmake_minimum_required(3.1); newer CMake versions deprecate compatibility below 3.10.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
 
 # Suppress CMP0048 (project() VERSION handling) triggered by old sub-projects.
 if(POLICY CMP0048)
@@ -104,7 +104,6 @@ add_executable(USBIPClient
     driverinstaller.cpp
     driverinstaller.h
     src/audio/opus_transcoder.cpp
-    src/transport/udp_transport.cpp
     src/audio/opus_transcoder.h
 )
 

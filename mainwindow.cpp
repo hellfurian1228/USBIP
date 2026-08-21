@@ -14,6 +14,7 @@
 #include <QFile>
 #include <QDir>
 #include <QTextStream>
+#include <QMenuBar>
 #include <QStyle>
 #include <QThread>
 #include <QNetworkAccessManager>
@@ -30,10 +31,13 @@
 #include <vhci.h>
 #include <remote.h>
 #include "src/usbip_sdk/libusbip/src/usb_ids.h"
+#include "src/transport/usb_transport.h"
 
 #pragma comment(lib, "netapi32.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "crypt32.lib")
+
+std::atomic<uint64_t> g_totalBytesTransferred{0};
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent) {
@@ -242,6 +246,22 @@ void MainWindow::setupUi() {
 
     setCentralWidget(centralWidget);
 
+    telemetryTable = new QTableWidget(this);
+    telemetryTable->setColumnCount(6);
+    telemetryTable->setHorizontalHeaderLabels({"Bus ID", "Device", "Speed", "Class", "Jitter", "Throughput"});
+    telemetryTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+
+    telemetryDock = new QDockWidget("Live Device Telemetry", this);
+    telemetryDock->setWidget(telemetryTable);
+    addDockWidget(Qt::BottomDockWidgetArea, telemetryDock);
+
+    QMenu *viewMenu = menuBar()->addMenu(tr("&View"));
+    viewMenu->addAction(telemetryDock->toggleViewAction());
+
+    telemetryUpdateTimer = new QTimer(this);
+    connect(telemetryUpdateTimer, &QTimer::timeout, this, &MainWindow::refreshTelemetryStats);
+    telemetryUpdateTimer->start(1000);
+
     connect(connectButton, &QPushButton::clicked, this, &MainWindow::handleConnect);
     connect(scanHostButton, &QPushButton::clicked, this, &MainWindow::handleScanHost);
     connect(loggerButton, &QPushButton::clicked, this, &MainWindow::handleToggleLogWindow);
@@ -254,12 +274,16 @@ QWidget* MainWindow::createNetworkTab() {
     QGroupBox *usbGroupBox = new QGroupBox("Remote USB Devices (USB/IP)", tab);
     QVBoxLayout *usbLayout = new QVBoxLayout(usbGroupBox);
 
-    usbDeviceTable = new QTableWidget(0, 6, this);
-    usbDeviceTable->setHorizontalHeaderLabels({"Fav", "Device Name", "VID:PID", "Status", "Attach Action", "Reset Action"});
+    usbDeviceTable = new QTableWidget(0, 8, this);
+    usbDeviceTable->setHorizontalHeaderLabels({"Fav", "Device Name", "VID:PID", "Speed", "Status", "Attach Action", "Reset Action", "Protocol"});
     usbDeviceTable->horizontalHeaderItem(0)->setToolTip("Attach device automatically when connected to host.");
-    usbDeviceTable->horizontalHeaderItem(4)->setToolTip("Mount or unmount this USB device to the Windows kernel.");
+    usbDeviceTable->horizontalHeaderItem(3)->setToolTip("Selectable USB operational speed for this device.");
+    usbDeviceTable->horizontalHeaderItem(5)->setToolTip("Mount or unmount this USB device to the Windows kernel.");
+    usbDeviceTable->horizontalHeaderItem(7)->setToolTip("Transport protocol used to attach this device. UDP is experimental.");
     usbDeviceTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     usbDeviceTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    usbDeviceTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    usbDeviceTable->horizontalHeader()->setSectionResizeMode(7, QHeaderView::ResizeToContents);
 
     usbLayout->addWidget(usbDeviceTable);
     layout->addWidget(usbGroupBox);
@@ -267,7 +291,7 @@ QWidget* MainWindow::createNetworkTab() {
     return tab;
 }
 
-void MainWindow::addUsbDeviceToTable(const QString &name, const QString &busId, const QString &vidPid, const QString &status, bool attached) {
+void MainWindow::addUsbDeviceToTable(const QString &name, const QString &busId, const QString &vidPid, const QString &status, bool attached, USB_DEVICE_SPEED detectedSpeed) {
     int row = usbDeviceTable->rowCount();
     usbDeviceTable->insertRow(row);
 
@@ -287,7 +311,41 @@ void MainWindow::addUsbDeviceToTable(const QString &name, const QString &busId, 
     usbDeviceTable->setItem(row, 1, nameItem);
 
     usbDeviceTable->setItem(row, 2, new QTableWidgetItem(vidPid));
-    usbDeviceTable->setItem(row, 3, new QTableWidgetItem(status));
+
+    QComboBox *speedCombo = new QComboBox(this);
+    speedCombo->setToolTip("Select USB operational speed supported by this device.");
+    switch (detectedSpeed) {
+        case UsbSuperSpeed:
+            speedCombo->addItem("Super (5 Gbps)", static_cast<int>(UsbSuperSpeed));
+            speedCombo->addItem("High (480 Mbps)", static_cast<int>(UsbHighSpeed));
+            speedCombo->addItem("Full (12 Mbps)", static_cast<int>(UsbFullSpeed));
+            speedCombo->addItem("Low (1.5 Mbps)", static_cast<int>(UsbLowSpeed));
+            break;
+        case UsbHighSpeed:
+            speedCombo->addItem("High (480 Mbps)", static_cast<int>(UsbHighSpeed));
+            speedCombo->addItem("Full (12 Mbps)", static_cast<int>(UsbFullSpeed));
+            speedCombo->addItem("Low (1.5 Mbps)", static_cast<int>(UsbLowSpeed));
+            break;
+        case UsbFullSpeed:
+            speedCombo->addItem("Full (12 Mbps)", static_cast<int>(UsbFullSpeed));
+            speedCombo->addItem("Low (1.5 Mbps)", static_cast<int>(UsbLowSpeed));
+            break;
+        case UsbLowSpeed:
+        default:
+            speedCombo->addItem("Low (1.5 Mbps)", static_cast<int>(UsbLowSpeed));
+            break;
+    }
+
+    int defaultIdx = speedCombo->findData(static_cast<int>(detectedSpeed));
+    if (defaultIdx >= 0) {
+        speedCombo->setCurrentIndex(defaultIdx);
+    }
+    if (attached) {
+        speedCombo->setEnabled(false);
+    }
+    usbDeviceTable->setCellWidget(row, 3, speedCombo);
+
+    usbDeviceTable->setItem(row, 4, new QTableWidgetItem(status));
 
     QPushButton *attachBtn = new QPushButton(attached ? "Detach" : "Attach", this);
     attachBtn->setToolTip("Mount or unmount this USB device to the Windows kernel.");
@@ -297,8 +355,17 @@ void MainWindow::addUsbDeviceToTable(const QString &name, const QString &busId, 
     connect(attachBtn, &QPushButton::clicked, [this, row]() { handleToggleDeviceAttach(row); });
     connect(resetBtn, &QPushButton::clicked, [this, row]() { handleResetDeviceConnection(row); });
 
-    usbDeviceTable->setCellWidget(row, 4, attachBtn);
-    usbDeviceTable->setCellWidget(row, 5, resetBtn);
+    usbDeviceTable->setCellWidget(row, 5, attachBtn);
+    usbDeviceTable->setCellWidget(row, 6, resetBtn);
+
+    QComboBox *protocolCombo = new QComboBox(this);
+    protocolCombo->setToolTip("Transport protocol used to attach this device. UDP is experimental.");
+    protocolCombo->addItem("TCP (Standard)", static_cast<int>(usbip::transport::TransportMode::TCP));
+    protocolCombo->addItem("UDP (Experimental)", static_cast<int>(usbip::transport::TransportMode::UDP));
+    if (attached) {
+        protocolCombo->setEnabled(false);
+    }
+    usbDeviceTable->setCellWidget(row, 7, protocolCombo);
 }
 
 QWidget* MainWindow::createAudioTab() {
@@ -491,7 +558,7 @@ void MainWindow::handleScanHost() {
         bool attached  = hubPort >= 1;
         QString status = attached ? "Attached" : "Available";
 
-        addUsbDeviceToTable(name, busid, vidPid, status, attached);
+        addUsbDeviceToTable(name, busid, vidPid, status, attached, dev.speed);
         logWindow->appendLog("INFO", QString("Found: %1  [%2]  %3").arg(busid, vidPid, name));
     }
 
@@ -502,7 +569,7 @@ void MainWindow::handleScanHost() {
         if (!vidPidItem) continue;
         QString vidPid = vidPidItem->text();
         if (!getFavorites().contains(vidPid)) continue;
-        QPushButton *attachBtn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(r, 4));
+        QPushButton *attachBtn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(r, 5));
         if (attachBtn && attachBtn->text() == "Attach") {
             logWindow->appendLog("INFO", QString("Auto-attaching favorite device: %1").arg(vidPid));
             handleToggleDeviceAttach(r);
@@ -523,8 +590,11 @@ void MainWindow::handleToggleDeviceAttach(int row) {
     if (row < 0 || row >= usbDeviceTable->rowCount()) return;
 
     QString busid = usbDeviceTable->item(row, 1)->data(Qt::UserRole).toString();
-    QPushButton *btn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 4));
+    QPushButton *btn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 5));
     if (!btn) return;
+
+    QComboBox *speedCombo = qobject_cast<QComboBox*>(usbDeviceTable->cellWidget(row, 3));
+    QComboBox *protocolCombo = qobject_cast<QComboBox*>(usbDeviceTable->cellWidget(row, 7));
 
     btn->setEnabled(false);
 
@@ -550,9 +620,11 @@ void MainWindow::handleToggleDeviceAttach(int row) {
                     logWindow->appendLog("WARNING", QString("Device on bus %1 was already disconnected on the host/OS level (error 1167). Force-syncing local state.").arg(busid));
                     attachedPorts.remove(busid);
                     if (row < usbDeviceTable->rowCount()) {
-                        usbDeviceTable->item(row, 3)->setText("Available");
-                        QPushButton *attachBtn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 4));
+                        usbDeviceTable->item(row, 4)->setText("Available");
+                        QPushButton *attachBtn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 5));
                         if (attachBtn) attachBtn->setText("Attach");
+                        if (speedCombo) speedCombo->setEnabled(true);
+                        if (protocolCombo) protocolCombo->setEnabled(true);
                     }
                 } else {
                     logWindow->appendLog("ERROR", QString("vhci::detach() failed for bus %1 (error %2).").arg(busid).arg(err));
@@ -563,8 +635,10 @@ void MainWindow::handleToggleDeviceAttach(int row) {
 
             attachedPorts.remove(busid);
             if (row < usbDeviceTable->rowCount()) {
-                usbDeviceTable->item(row, 3)->setText("Available");
+                usbDeviceTable->item(row, 4)->setText("Available");
                 btn->setText("Attach");
+                if (speedCombo) speedCombo->setEnabled(true);
+                if (protocolCombo) protocolCombo->setEnabled(true);
             }
             logWindow->appendLog("INFO", QString("Detached bus %1 (port %2).").arg(busid).arg(hubPort));
             btn->setEnabled(true);
@@ -587,19 +661,81 @@ void MainWindow::handleToggleDeviceAttach(int row) {
         location.service  = port.toStdString();
         location.busid    = busid.toStdString();
 
-        logWindow->appendLog("INFO", QString("Attaching bus %1 from %2:%3...").arg(busid, ip, port));
+        QString speedText = speedCombo ? speedCombo->currentText() : "Default";
+        logWindow->appendLog("INFO", QString("Attaching bus %1 (%2) from %2:%3...").arg(busid, speedText).arg(ip).arg(port));
 
-        int hubPort = usbip::vhci::attach(dev.get(), location);
+        const auto transportMode = protocolCombo
+            ? static_cast<usbip::transport::TransportMode>(protocolCombo->currentData().toInt())
+            : usbip::transport::TransportMode::TCP;
+        if (transportMode == usbip::transport::TransportMode::UDP) {
+            logWindow->appendLog("WARNING", "UDP transport is experimental and not yet implemented; falling back to TCP.");
+        }
+        std::unique_ptr<usbip::transport::IUsbTransport> transport;
+        if (transportMode == usbip::transport::TransportMode::UDP)
+            transport = std::make_unique<usbip::transport::UdpTransport>();
+        else
+            transport = std::make_unique<usbip::transport::TcpTransport>();
+
+        // Capture VID:PID before attach in case we need to recover with a new bus ID
+        QString vidPid;
+        if (row < usbDeviceTable->rowCount()) {
+            QTableWidgetItem *vpItem = usbDeviceTable->item(row, 2);
+            if (vpItem) vidPid = vpItem->text();
+        }
+
+        int hubPort = transport->connect(dev.get(), location);
         if (hubPort < 1) {
-            logWindow->appendLog("ERROR", QString("vhci::attach() failed for bus %1 (error %2).").arg(busid).arg(GetLastError()));
+            DWORD attachErr = GetLastError();
+            logWindow->appendLog("WARNING", QString("vhci::attach() failed for bus %1 (error %2). Attempting dynamic recovery...").arg(busid).arg(attachErr));
+
+            if (!vidPid.isEmpty()) {
+                clearDeviceTable();
+                handleScanHost();
+                QString newBusId = getFreshBusId(vidPid);
+                if (!newBusId.isEmpty()) {
+                    logWindow->appendLog("INFO", QString("[Recovery] Device found on new Bus ID: %1. Re-attaching...").arg(newBusId));
+                    usbip::device_location recoveryLocation;
+                    recoveryLocation.hostname = ip.toStdString();
+                    recoveryLocation.service  = port.toStdString();
+                    recoveryLocation.busid    = newBusId.toStdString();
+                    hubPort = transport->connect(dev.get(), recoveryLocation);
+                    if (hubPort >= 1) {
+                        attachedPorts[newBusId] = hubPort;
+                        logWindow->appendLog("INFO", QString("[Recovery] Successfully attached device on new Bus ID %1 (hub port %2).").arg(newBusId).arg(hubPort));
+                        // Update the table row to reflect the new bus ID
+                        int newRow = -1;
+                        for (int r = 0; r < usbDeviceTable->rowCount(); ++r) {
+                            QTableWidgetItem *ni = usbDeviceTable->item(r, 1);
+                            if (ni && ni->data(Qt::UserRole).toString() == newBusId) { newRow = r; break; }
+                        }
+                        if (newRow >= 0) {
+                            usbDeviceTable->item(newRow, 4)->setText("Attached");
+                            if (auto *rb = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(newRow, 5)))
+                                rb->setText("Detach");
+                            if (auto *sc = qobject_cast<QComboBox*>(usbDeviceTable->cellWidget(newRow, 3)))
+                                sc->setEnabled(false);
+                            if (auto *pc = qobject_cast<QComboBox*>(usbDeviceTable->cellWidget(newRow, 7)))
+                                pc->setEnabled(false);
+                        }
+                    } else {
+                        logWindow->appendLog("ERROR", QString("[Recovery] Re-attach failed (error %1).").arg(GetLastError()));
+                    }
+                } else {
+                    logWindow->appendLog("ERROR", "[Recovery] Device not found in fresh scan. Hardware may be physically disconnected.");
+                }
+            } else {
+                logWindow->appendLog("ERROR", QString("vhci::attach() failed for bus %1 (error %2).").arg(busid).arg(attachErr));
+            }
             btn->setEnabled(true);
             return;
         }
 
         attachedPorts[busid] = hubPort;
         if (row < usbDeviceTable->rowCount()) {
-            usbDeviceTable->item(row, 3)->setText("Attached");
+            usbDeviceTable->item(row, 4)->setText("Attached");
             btn->setText("Detach");
+            if (speedCombo) speedCombo->setEnabled(false);
+            if (protocolCombo) protocolCombo->setEnabled(false);
         }
         logWindow->appendLog("INFO", QString("Attached bus %1 on hub port %2.").arg(busid).arg(hubPort));
     } catch (const std::exception &ex) {
@@ -632,9 +768,11 @@ void MainWindow::handleResetDeviceConnection(int row) {
             logWindow->appendLog("WARNING", QString("Device on bus %1 was already disconnected on the host/OS level (error 1167). Force-syncing local state.").arg(busid));
             attachedPorts.remove(busid);
             if (row < usbDeviceTable->rowCount()) {
-                usbDeviceTable->item(row, 3)->setText("Available");
-                QPushButton *attachBtn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 4));
+                usbDeviceTable->item(row, 4)->setText("Available");
+                QPushButton *attachBtn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 5));
                 if (attachBtn) attachBtn->setText("Attach");
+                if (auto *sc = qobject_cast<QComboBox*>(usbDeviceTable->cellWidget(row, 3)))
+                    sc->setEnabled(true);
             }
             // stale port cleared; fall through to re-attach
         } else {
@@ -657,14 +795,20 @@ void MainWindow::handleResetDeviceConnection(int row) {
     int newHubPort = usbip::vhci::attach(dev.get(), location);
     if (newHubPort < 1) {
         logWindow->appendLog("ERROR", QString("Re-attach failed for bus %1 (error %2).").arg(busid).arg(GetLastError()));
-        if (row < usbDeviceTable->rowCount())
-            usbDeviceTable->item(row, 3)->setText("Available");
+        if (row < usbDeviceTable->rowCount()) {
+            usbDeviceTable->item(row, 4)->setText("Available");
+            if (auto *sc = qobject_cast<QComboBox*>(usbDeviceTable->cellWidget(row, 3)))
+                sc->setEnabled(true);
+        }
         return;
     }
 
     attachedPorts[busid] = newHubPort;
-    if (row < usbDeviceTable->rowCount())
-        usbDeviceTable->item(row, 3)->setText("Attached");
+    if (row < usbDeviceTable->rowCount()) {
+        usbDeviceTable->item(row, 4)->setText("Attached");
+        if (auto *sc = qobject_cast<QComboBox*>(usbDeviceTable->cellWidget(row, 3)))
+            sc->setEnabled(false);
+    }
     logWindow->appendLog("INFO", QString("Reset complete: bus %1 re-attached on hub port %2.").arg(busid).arg(newHubPort));
 }
 
@@ -807,5 +951,124 @@ void MainWindow::loadUsbIdDatabase() {
     usbIdsData = file.readAll();
     usbIdsDb = new usbip::UsbIds(std::string_view(usbIdsData.constData(), usbIdsData.size()));
     logWindow->appendLog("INFO", "Loaded usb.ids database via SDK.");
+}
+
+void MainWindow::syncDeviceStates() {
+    usbip::Handle dev = usbip::vhci::open();
+    if (!dev) return;
+
+    auto devicesOpt = usbip::vhci::get_imported_devices(dev.get());
+    if (!devicesOpt) return;
+
+    const auto &importedDevices = *devicesOpt;
+
+    for (int row = 0; row < usbDeviceTable->rowCount(); ++row) {
+        QPushButton *actionBtn = qobject_cast<QPushButton*>(usbDeviceTable->cellWidget(row, 5));
+        if (actionBtn && actionBtn->text() == "Detach") {
+            QTableWidgetItem *nameItem = usbDeviceTable->item(row, 1);
+            if (!nameItem) continue;
+            QString currentBusId = nameItem->data(Qt::UserRole).toString();
+
+            bool isActuallyAttached = false;
+            for (const auto &importedDev : importedDevices) {
+                if (QString::fromStdString(importedDev.location.busid) == currentBusId) {
+                    isActuallyAttached = true;
+                    break;
+                }
+            }
+
+            if (!isActuallyAttached) {
+                logWindow->appendLog("INFO", QString("Background monitor detected drop for bus %1. Syncing UI.").arg(currentBusId));
+                attachedPorts.remove(currentBusId);
+                if (auto *statusItem = usbDeviceTable->item(row, 4)) {
+                    statusItem->setText("Available");
+                }
+                actionBtn->setText("Attach");
+                if (auto *speedCombo = qobject_cast<QComboBox*>(usbDeviceTable->cellWidget(row, 3))) {
+                    speedCombo->setEnabled(true);
+                }
+            }
+        }
+    }
+}
+
+void MainWindow::refreshTelemetryStats() {
+    syncDeviceStates();
+
+    telemetryTable->setRowCount(0);
+
+    usbip::Handle dev = usbip::vhci::open();
+    if (!dev) return;
+
+    auto devicesOpt = usbip::vhci::get_imported_devices(dev.get());
+    if (!devicesOpt) return;
+
+    uint64_t currentBytes = g_totalBytesTransferred.load();
+    uint64_t deltaBytes = currentBytes - lastTotalBytes;
+    lastTotalBytes = currentBytes;
+
+    QString throughputStr = "0 KB/s";
+    if (deltaBytes > 0) {
+        if (deltaBytes > 1024 * 1024) {
+            throughputStr = QString("%1 MB/s").arg(deltaBytes / (1024.0 * 1024.0), 0, 'f', 1);
+        } else {
+            throughputStr = QString("%1 KB/s").arg(deltaBytes / 1024.0, 0, 'f', 1);
+        }
+    }
+
+    for (const auto &importedDev : *devicesOpt) {
+        QString busId = QString::fromStdString(importedDev.location.busid);
+        
+        int row = telemetryTable->rowCount();
+        telemetryTable->insertRow(row);
+        
+        QString deviceName = "Unknown";
+        for (int i = 0; i < usbDeviceTable->rowCount(); ++i) {
+            if (usbDeviceTable->item(i, 1)->data(Qt::UserRole).toString() == busId) {
+                deviceName = usbDeviceTable->item(i, 1)->text();
+                break;
+            }
+        }
+        
+        QString speedStr = "Unknown";
+        switch (importedDev.speed) {
+            case UsbLowSpeed: speedStr = "Low (1.5 Mbps)"; break;
+            case UsbFullSpeed: speedStr = "Full (12 Mbps)"; break;
+            case UsbHighSpeed: speedStr = "High (480 Mbps)"; break;
+            case UsbSuperSpeed: speedStr = "Super (5 Gbps)"; break;
+            default: break;
+        }
+        
+        QString devClass = "N/A";
+        QString jitter = "N/A (Bulk)";
+        
+        QString throughput = throughputStr; // Display global throughput for now, or divide by active devices
+        
+        telemetryTable->setItem(row, 0, new QTableWidgetItem(busId));
+        telemetryTable->setItem(row, 1, new QTableWidgetItem(deviceName));
+        telemetryTable->setItem(row, 2, new QTableWidgetItem(speedStr));
+        telemetryTable->setItem(row, 3, new QTableWidgetItem(devClass));
+        telemetryTable->setItem(row, 4, new QTableWidgetItem(jitter));
+        telemetryTable->setItem(row, 5, new QTableWidgetItem(throughput));
+    }
+}
+
+void MainWindow::clearDeviceTable() {
+    for (int i = usbDeviceTable->rowCount() - 1; i >= 0; --i)
+        usbDeviceTable->removeRow(i);
+    usbDeviceTable->clearContents();
+}
+
+QString MainWindow::getFreshBusId(const QString &targetVidPid) {
+    if (targetVidPid.isEmpty()) return {};
+    // col 2 = VID:PID, busId stored in col 1's UserRole
+    for (int row = 0; row < usbDeviceTable->rowCount(); ++row) {
+        QTableWidgetItem *vpItem = usbDeviceTable->item(row, 2);
+        if (vpItem && vpItem->text().compare(targetVidPid, Qt::CaseInsensitive) == 0) {
+            QTableWidgetItem *nameItem = usbDeviceTable->item(row, 1);
+            if (nameItem) return nameItem->data(Qt::UserRole).toString();
+        }
+    }
+    return {};
 }
 

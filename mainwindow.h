@@ -6,6 +6,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QTableWidget>
+#include <QDockWidget>
 #include <QComboBox>
 #include <QSlider>
 #include <QSpinBox>
@@ -22,7 +23,10 @@
 #include <QProcess>
 #include <QSystemTrayIcon>
 #include <QMenu>
+#include <QMenuBar>
 #include "logwindow.h"
+#include <wtypes.h>
+#include <usbspec.h>
 
 namespace usbip { class UsbIds; }
 
@@ -48,6 +52,7 @@ private slots:
     void handleThemeChange(int index);
     void handleNewProfile();
     void handleProfileChange(const QString &profileName);
+    void refreshTelemetryStats();
 
 private:
     void setupUi();
@@ -55,7 +60,7 @@ private:
     QWidget* createNetworkTab();
     QWidget* createAudioTab();
     QWidget* createSettingsTab();
-    void addUsbDeviceToTable(const QString &name, const QString &busId, const QString &vidPid, const QString &status, bool attached);
+    void addUsbDeviceToTable(const QString &name, const QString &busId, const QString &vidPid, const QString &status, bool attached, USB_DEVICE_SPEED detectedSpeed = UsbHighSpeed);
     bool validatePort(quint16 port);
     void loadSettings();
     void saveSettings();
@@ -67,6 +72,9 @@ private:
     int findAttachedPort(const QString &busid) const;
     QStringList getFavorites() const;
     void setFavorite(const QString &vidPid, bool favorite);
+    void clearDeviceTable();
+    QString getFreshBusId(const QString &targetVidPid);
+    void syncDeviceStates();
 
     QTabWidget *tabWidget;
     QLineEdit *hostIpLineEdit;
@@ -92,6 +100,10 @@ private:
     QCheckBox *autoConnectCheckBox;
     QComboBox *profileCombo;
 
+    QDockWidget *telemetryDock;
+    QTableWidget *telemetryTable;
+    QTimer *telemetryUpdateTimer;
+
     LogWindow *logWindow;
     bool isLogicallyConnected = false;
     
@@ -104,6 +116,7 @@ private:
     bool isExiting = false;
     QString currentProfile;
     AudioRelayManager *audioRelayManager;
+    uint64_t lastTotalBytes = 0;
 };
 
 #endif // MAINWINDOW_H

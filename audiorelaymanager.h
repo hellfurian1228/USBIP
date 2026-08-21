@@ -15,6 +15,9 @@
 #endif
 
 #include <opus.h>
+#include <atomic>
+
+extern std::atomic<uint64_t> g_totalBytesTransferred;
 
 class AudioRelayManager : public QObject {
     Q_OBJECT
@@ -48,6 +51,7 @@ private:
     OpusEncoder* opusEncoder = nullptr;
     OpusDecoder* opusDecoder = nullptr;
     QByteArray pcmAccumulator;
+    uint64_t byteCounter;
 };
 
 #endif // AUDIORELAYMANAGER_H

@@ -95,10 +95,12 @@ void AudioRelayManager::startStreaming(const QAudioDevice& device, const QHostAd
                     opusEncoder,
                     reinterpret_cast<const opus_int16*>(pcmChunk.constData()),
                     960, outPacket, sizeof(outPacket));
-                if (encoded > 0)
+                if (encoded > 0) {
                     udpSocket->writeDatagram(
                         reinterpret_cast<const char*>(outPacket), encoded,
                         targetIp, targetPort);
+                    g_totalBytesTransferred += encoded;
+                }
                 pcmAccumulator.remove(0, 3840);
             }
         });
@@ -139,12 +141,14 @@ void AudioRelayManager::startReceiving(const QAudioDevice& device, quint16 liste
                 QHostAddress sender;
                 quint16 senderPort;
                 udpSocket->readDatagram(datagram.data(), datagram.size(), &sender, &senderPort);
-                if (outputDevice && outputDevice->isOpen() && outputDevice->isWritable() && opusDecoder) {
-                    opus_int16 outPcm[960 * 2];
+                g_totalBytesTransferred += datagram.size();
+
+                if (opusDecoder && outputDevice) {
+                    opus_int16 outPcm[1920];
                     int decodedSamples = opus_decode(
                         opusDecoder,
                         reinterpret_cast<const unsigned char*>(datagram.constData()),
-                        datagram.size(), outPcm, 960, 0);
+                        datagram.size(), outPcm, 1920, 0);
                     if (decodedSamples > 0) {
                         qint64 byteSize = decodedSamples * 2 * static_cast<int>(sizeof(opus_int16));
                         outputDevice->write(reinterpret_cast<const char*>(outPcm), byteSize);
